@@ -1,0 +1,451 @@
+<simulation xmds-version="2">
+    <name>1DGEM-EIT.out</name>
+    <author>Cam</author>
+    <description>
+        Implemented:
+        -Atomic density
+            *longditudional
+        -Probe beam
+            *arbitrary pulses via hermite basis
+    </description>
+    
+    <features>
+        <fftw plan="patient" />
+        <openmp threads="1"/>
+        <auto_vectorise />
+        <diagnostics />
+        <benchmark />
+        <globals>
+            <![CDATA[
+
+            //global constants
+            const double pi = M_PI;
+            double GammaC = 2*pi * 0.5e3; //decay rate due to inelastic collisions (rad/s)
+            double Gamma = 2*pi * 5.75e6; //decay rate of excited states (rad/s)
+            double GammaD = 2*pi * 2e3; //decay rate due to elastic collisions and atomic motion in and out of interaction region (rad/s)
+            double g = 170110;//138994; //Coupling strength, this is for the mf=1 hyperfine level
+            double g0 = g*sqrt(0.5); //Coupling strength for the mf=0 level, sqrt(0.5) is the adjustment factor TODO
+            double gm1 = g*sqrt(0.16667); //TODO
+
+            double c = 3e8; //Speed of light (m/s)
+            double probe_wavelength = 795e-9; //(m)
+            double k0 =  2*pi / probe_wavelength;
+            double x_sample_min = 0;
+            double x_sample_max = 0.03;
+            double mem_len = x_sample_max-x_sample_min;
+            double half_mem_len = mem_len/2;
+            double mem_width = 0.0004;
+            double mem_height = 0.0004;
+            double interaction_volume = mem_len*mem_width*mem_height;
+
+            //atomic density stuff
+            double Num_atoms = 0.2e10; //number of atoms in the pumped (mf = 1) state
+            double Num_atoms_m1 = 0.2e9; //number of atoms in the mf = -1 state
+            double Num_atoms_0 = 0.2e9; //number of atoms in the mf = 0 state
+            double trans_dens_factor; //transverse density gaussian standard deviation
+            double long_dens_width_factor; //width of the smothed hat function, 1 == mem_width
+            double long_dens_sharpness; //longditudional density edge sharpness of hat function 
+            double long_dens_width = mem_len; //width of smoothed hat function for longditudional density
+
+            //characteristic frequency and time, makes things easier
+            double t_char = pi/Gamma; //characteristic timespan //tchar = 86.957e-09s
+            double f_char = Gamma/pi; //characteristic frequency //fchar = 11.5MHz
+
+            //Detuning frequencies
+            double Delta; //GEM Single photon detuning (rad/s)
+            double Delta_t; //for later use
+            double delta_max; // 3.8333e8; //2*pi * 28.7e6; //Max two photon detuning per unit length
+
+            double gradient_flip; //flips the order of the gradient, 0 == standard, or 1 == flipped
+            bool gradient_has_flipped = 0;
+            double AC_Stark_Shift;
+            double AC_Stark_Shift_0;
+            double AC_Stark_Shift_m1;
+            double g_switch;
+
+            //Control beam
+            double Omega_ideal; //Control field Rabi freq (rad/s), without inhomogenaity
+            double Omega;
+            double Omega_t; //time dependent control field rabi frequency, for use later 
+            double factor_Omega_0 = sqrt(1.5); //ratio of coupling coefficients from mf=1 to mf=0
+            double Omega_t_0;
+            double factor_Omega_m1 = sqrt(1.5); //ratio of coupling coefficients from mf=1 to mf=0
+            double Omega_t_m1;
+            bool gaussian_control_beam;
+            real control_beam_std_dev; //standard deviation of control beam, 0.001 gives approximatley 0.98% at edges 
+            
+
+            //pulse profile
+            double tmax = 45*t_char;
+            double pulsewidth; // = 1.5*t_char; //(s) //actual width of Hermite function pulse is about 8*pulsewidth
+            double tin; // = 5*pulsewidth; //width of pulse /8 + buffer
+            double t_gap;
+            double coeff_0;
+            double coeff_1;
+            double coeff_2;
+            double coeff_3;
+            double coeff_4;
+
+            //beam profile
+            double E0 = 1e-3;
+            double waist_mid = 0.00015; //waist in the centre of the memory
+            double beam_azimuth_angle = 0.0; //radians, range max is plus/minus tan(mem_width/mem_length) = 0.0133
+  
+            //decoherence factors
+            double gamma_ge = Gamma/2 + GammaD + GammaC;
+            double gamma_es = gamma_ge;
+            double gamma_gs = GammaD+GammaC;
+
+
+            //global functions
+
+            double gaussian( double x, double w ){ 
+                return exp( -0.5 * pow(x,2) / pow(w,2) ); 
+            }
+            
+            //this is the convolution of a hat function and gaussian, sharpness is essentially the inverse of standard deviation
+            //if width == mem_width then smothed_hat_fun(x=edge) = 0.5
+            double smoothed_hat_fun(double x, double centre, double width, double sharpness){
+                return 0.5*erf( (x- (centre-0.5*width) )*sharpness ) + 0.5*erf( (-x + (centre+0.5*width) )*sharpness );
+            }
+
+            double factorial(int i){
+                int f = 1;
+                if (i <= 1) return 1;
+                while(i > 1){
+                    f = i*f;
+                    i=i-1;
+                }
+                return f;
+            }
+
+            double activation_sigmoid(double x, double activation_width){
+
+                return 1/(1+exp(-40*x/activation_width));
+            }
+
+            double smoothed_control_switch(double time, double tmax){
+
+                double t_act = t_char; //<- configure this
+
+                if      (time < 0.35*tmax - t_act/2) { return 1.0; }
+                else if (time < 0.35*tmax + t_act/2) { return 1-activation_sigmoid(time-0.35*tmax, t_act); }
+                else if (time < 0.65*tmax - t_act/2) { return 0.0; }
+                else if (time < 0.65*tmax + t_act/2) { return activation_sigmoid(time-0.65*tmax, t_act); }
+                else                                 { return 1.0; }
+            }
+
+            double control_gem_store(double time, double t_end, double t_act){
+
+                //double t_act = t_char; //<- configure this
+                //t_end was 0.35*tmax
+
+                if      (time < t_end - t_act/2) { return 1.0; }
+                else if (time < t_end + t_act/2) { return 1-activation_sigmoid(time-t_end, t_act); }
+                else                                 { return 0.0; }
+            }
+
+            double control_eit_retrieve(double time, double t_start, double t_act){
+
+                //double t_act = t_char; //<- configure this
+                //t_start was 0.65*tmax
+
+                if      (time < t_start - t_act/2) { return 0.0; }
+                else if (time < t_start + t_act/2) { return activation_sigmoid(time-t_start, t_act); }
+                else                                 { return 1.0; }
+            } 
+
+            double control_switch(double time, double tmax){
+                if (time/tmax < 0.35) { return 1.0; }
+                else if (time/tmax < 0.65 ) { return 0.0; }
+                else { return 1.0; }
+            }
+
+            double gradient_switch(double time, double tmax){
+                if (time/tmax < 0.50) { return 0; }
+                    else { return 1; }
+            }
+
+            double smoothed_gradient_switch(double time, double tmax){
+
+                double t_act = t_char; //<- configure this
+                if      (time < 0.50*tmax - t_act/2) { return 0; }
+                else if (time < 0.50*tmax + t_act/2) { return activation_sigmoid(time-0.50*tmax, t_act); }
+                else                                 { return 1; }
+            }
+
+
+            double density_func(double x){ 
+                double l_density = 1;
+                
+                if (long_dens_sharpness != 0){
+                    l_density = smoothed_hat_fun(x, half_mem_len, long_dens_width_factor*mem_len, long_dens_sharpness); //this function is worse but works: gaussian(x-half_mem_len, long_dens_factor*mem_len);
+                } else if (long_dens_width_factor != 1){
+                    if (x < (half_mem_len-0.5*long_dens_width_factor*mem_len) || x > (half_mem_len+0.5*long_dens_width_factor*mem_len) ){ 
+                        l_density = 0;
+                    } else {
+                        l_density = 1;
+                    }
+                }
+                return l_density;
+            }
+
+            double hermite_poly(int n, double x){
+                if (n == 0) {
+                    return 1;
+                } else if (n == 1) {
+                    return 2*x;
+                } else return 2*x*hermite_poly(n-1, x)-2*(n-1)*hermite_poly(n-2, x);
+            }
+
+            double hermite_func(int n, double x){
+                double norm = 1/(  sqrt( pow(2,n) * factorial(n) * sqrt(pi) )  );
+                return norm*gaussian(x,1)*hermite_poly(n, x);
+            }
+
+            double hermite_pulse_profile(double t, double w){
+                double p0 = hermite_func(0, t/w);
+                double p1 = hermite_func(1, t/w);
+                double p2 = hermite_func(2, t/w);
+                double p3 = hermite_func(3, t/w);
+                double p4 = hermite_func(4, t/w);
+                return coeff_0*p0 + coeff_1*p1 + coeff_2*p2 + coeff_3*p3 + coeff_4*p4;
+            }
+
+            double two_pulse_train(double t, double w, double T_gap){
+                return hermite_pulse_profile(t-T_gap/2, 0.25*w)+hermite_pulse_profile(t+T_gap/2, 0.25*w);
+            }
+
+            double grad_fun(double x, bool inv){
+                if (inv == 0){
+                    return delta_max*( 0.5 + (x-x_sample_max)/(x_sample_max-x_sample_min) ); //return (x-x_sample_min) * delta_max;
+                } else {
+                    return -delta_max*( 0.5 + (x-x_sample_max)/(x_sample_max-x_sample_min) ); //( x_sample_max - (x-x_sample_min) ) * delta_max;
+                }
+            }
+
+            ]]>
+
+        </globals>
+
+        <arguments append_args_to_output_filename="yes">
+            <argument name="lds" type="real" default_value="0"/>
+            <argument name="ldw" type="real" default_value="1"/>
+            <argument name="dm" type="real" default_value="8"/>
+            <argument name="gf" type="real" default_value="0"/>
+            <argument name="c0" type="real" default_value="1"/>
+            <argument name="c1" type="real" default_value="0"/>
+            <argument name="c2" type="real" default_value="0"/>
+            <argument name="c3" type="real" default_value="0"/>
+            <argument name="c4" type="real" default_value="0"/>
+            <argument name="De" type="real" default_value="10"/>
+            <argument name="Om" type="real" default_value="2"/>
+            <argument name="Pw" type="real" default_value="1"/>
+            <argument name="Tin" type="real" default_value="4"/>
+            <argument name="tgap" type="real" default_value="8"/>
+
+            <![CDATA[
+                
+                //Atomic density factors
+                long_dens_sharpness = lds;
+                long_dens_width_factor = ldw;
+
+                gradient_flip = gf; //flip the gradient? 0:standard 1:flipped
+                
+                //Pulse shaping coefficients
+                coeff_0 = c0;
+                coeff_1 = c1;
+                coeff_2 = c2;
+                coeff_3 = c3;
+                coeff_4 = c4;
+                pulsewidth = Pw * t_char;
+                tin = Tin * t_char;
+                t_gap = tgap * t_char;
+
+                //Control beam rabi freq 
+                Omega_ideal = 2*pi * Om*f_char; //Control field Rabi freq (rad/s)
+                Omega = Omega_ideal;
+                
+                //Detuning
+                Delta = 2*pi * De*f_char; //Single photon detuning (rad/s)
+                delta_max = 2*pi * dm*f_char;  //Max two photon detuning
+
+            ]]>
+        </arguments>
+
+
+    </features>
+
+    <geometry>
+        <propagation_dimension> t </propagation_dimension>
+        <transverse_dimensions>
+            <dimension name="x" lattice="128" domain="(0, 0.03)" />
+        </transverse_dimensions>
+    </geometry>
+
+    <vector name="state" type="complex" dimensions="x">
+        <components> phi_gem1 phi_gsm1 phi_ge0 phi_gs0 phi_gg phi_ss phi_ee phi_es phi_ge phi_gs</components>
+        <initialisation>
+            <![CDATA[
+                //State now includes mf=-1 (m1) and mf=0 states under the weak field limit
+                phi_gg = 1.0;
+                phi_gem1 = phi_gsm1 = phi_ge0 = phi_gs0 = phi_ss = phi_ee = phi_es = phi_ge = phi_gs = 0;
+            ]]>
+        </initialisation>
+    </vector>
+
+    <vector name="probe" type="complex" dimensions="x">
+        <components> E </components>
+    </vector>
+   
+    <vector name="atom_density_dist" type="real" dimensions="x">
+        <components> Dist </components>
+        <initialisation>
+            <![CDATA[ 
+                Dist = density_func(x);
+            ]]>
+        </initialisation>
+    </vector>
+
+    <vector name="atom_density_dist_normalisation" type="real" dimensions="">
+        <components> d_norm count</components>
+        <initialisation>
+            <dependencies> atom_density_dist </dependencies>
+            <![CDATA[ 
+                d_norm += Dist;
+                count += 1;
+            ]]>
+        </initialisation>
+    </vector>
+
+    <vector name="interacting_atoms" type="real" dimensions= "x">
+        <components> Ni Nim1 Ni0</components>
+        <initialisation>
+            <dependencies> atom_density_dist atom_density_dist_normalisation </dependencies>
+            <![CDATA[ 
+                Ni = Num_atoms*Dist/(d_norm/count);
+                Nim1 = Num_atoms_m1*Dist/(d_norm/count);
+                Ni0 = Num_atoms_0*Dist/(d_norm/count);
+            ]]>
+        </initialisation>
+    </vector>
+
+    <vector name="gradient_field" type="real" dimensions="x">
+        <components> delta_store delta_recall delta</components>
+        <initialisation>
+            <![CDATA[
+                delta_store = grad_fun(x, gradient_flip);
+                delta_recall = grad_fun(x, !gradient_flip);
+            ]]>
+        </initialisation>
+    </vector>
+
+
+    <sequence>
+        <integrate algorithm="ARK45" interval="4.0e-6" steps="45000000" tolerance="1e-9">
+        <!--<integrate algorithm="ARK45" interval="0.5e-6" steps="150000" tolerance="1e-4">-->
+            <samples>600</samples>
+            <!--<samples>150</samples>-->
+
+            <operators>
+                <integration_vectors>state</integration_vectors>
+                <dependencies>interacting_atoms gradient_field</dependencies>
+
+                <operator kind="functions">
+                    <![CDATA[
+                        //All the non-vector time dependant stuff here 
+                        g_switch = smoothed_gradient_switch(t,tmax);
+                        Omega_t = Omega*(control_gem_store(t, 0.35*tmax, t_char) + control_eit_retrieve(t, 0.65*tmax, t_char));
+                        Omega_t_0 = Omega_t*factor_Omega_0;
+                        Omega_t_m1 = Omega_t*factor_Omega_m1;
+                        Delta_t = Delta*control_gem_store(t, 0.35*tmax, t_char); //Single photon detuning is 0 for eit retrieval 
+                        AC_Stark_Shift = Delta_t*Omega_t*Omega_t/(Gamma*Gamma+Delta_t*Delta_t);
+                    ]]>
+                </operator>
+
+                <operator kind="cross_propagation" algorithm="RK4"  propagation_dimension="x">
+
+                    <integration_vectors>probe</integration_vectors>
+
+                    <dependencies>state interacting_atoms</dependencies>
+
+                    <boundary_condition kind="left">
+                        <![CDATA[
+                            //E = E0*hermite_pulse_profile(t-tin, pulsewidth);
+                            //two_pulse_train(double t, double w, double T_gap)
+                            E = E0*two_pulse_train(t-(tin+t_gap/2), pulsewidth, t_gap)*exp(i*AC_Stark_Shift*t);
+                        ]]>
+                    </boundary_condition>
+
+                    <![CDATA[
+                        dE_dx = i*gm1*Nim1*phi_gem1/c + i*g0*Ni0*phi_ge0/c + i*g*Ni*phi_ge/c;
+                    ]]>
+                </operator>
+
+                <![CDATA[
+
+                    //Omega_t is different for diff mf levels
+                    //not sure about gammas (decay)
+                    delta = (1-g_switch)*delta_store+g_switch*delta_recall;
+
+                    //AC_Stark_Shift_m1 = Delta_t*Omega_t_m1*Omega_t_m1/(Gamma*Gamma+Delta_t*Delta_t);
+                    
+                    dphi_gem1_dt = (i*gm1*E + i*Omega_t_m1*phi_gsm1 - (gamma_ge+i*Delta_t)*phi_gem1); 
+                    dphi_gsm1_dt = i*conj(Omega_t_m1)*phi_gem1 - (gamma_gs-i*delta)*phi_gsm1; //-delta as mf=-1 level has the oposite magnetic response
+                    
+                    //dphi_gsm1_dt = i*conj(Omega_t_m1)*phi_gem1 - (gamma_gs+i*(-delta-AC_Stark_Shift_m1))*phi_gsm1;
+
+
+                    //AC_Stark_Shift_0 = Delta_t*Omega_t_0*Omega_t_0/(Gamma*Gamma+Delta_t*Delta_t);
+
+                    dphi_ge0_dt = i*g0*E + i*Omega_t_0*phi_gs0 - (gamma_ge+i*Delta_t)*phi_ge0;
+                    dphi_gs0_dt = i*conj(Omega_t_0)*phi_ge0 - gamma_gs*phi_gs0; //delta == 0 as mf=0 has no magnetic response
+
+                    //dphi_gs0_dt = i*conj(Omega_t_0)*phi_ge0 - (gamma_gs+i*(-AC_Stark_Shift_0))*phi_gs0;                    
+                    
+
+                    //AC_Stark_Shift = Delta_t*Omega_t*Omega_t/(Gamma*Gamma+Delta_t*Delta_t);
+
+                    dphi_gg_dt = -i*g*E*phi_ge + i*g*conj(E)*phi_ge + Gamma*phi_ee/2 + GammaC*(phi_ss-phi_gg);
+                    dphi_ss_dt = -i*Omega_t*phi_es + i*conj(Omega_t)*phi_es + Gamma*phi_ee/2 + GammaC*(phi_gg-phi_ss);
+                    dphi_ee_dt = 0; //i*g*E*phi_ge + i*Omega_t*phi_es - i*g*conj(E)*phi_ge - i*conj(Omega_t)*phi_es - Gamma*phi_ee;
+                    dphi_es_dt = i*conj(Omega_t)*(phi_ee-phi_ss) + i*g*conj(E)*phi_gs - (gamma_es - i*(Delta_t-delta))*phi_es;
+                    dphi_ge_dt = i*g*E*(phi_gg-phi_ee) + i*Omega_t*phi_gs - (gamma_ge + i*Delta_t)*phi_ge;
+                    dphi_gs_dt = i*conj(Omega_t)*phi_ge - i*g*E*phi_es - (gamma_gs+i*delta)*phi_gs;
+
+                    //dphi_es_dt = i*conj(Omega_t)*(phi_ee-phi_ss) + i*g*conj(E)*phi_gs - (gamma_es - i*(Delta_t-(delta-AC_Stark_Shift)))*phi_es;
+                    //dphi_gs_dt = i*conj(Omega_t)*phi_ge - i*g*E*phi_es - (gamma_gs+i*(delta-AC_Stark_Shift))*phi_gs;
+
+                ]]>
+            </operators>
+
+        </integrate>
+    </sequence>
+
+    <output filename="1Dgem-eit" format="hdf5">
+        <group>
+            <sampling basis="x">
+                <moments>ER EI  grad  ctrl  phi_geR phi_geI  phi_gsR phi_gsI phi_ge0R phi_ge0I phi_gs0R phi_gs0I phi_gem1R phi_gem1I phi_gsm1R phi_gsm1I detuning</moments>
+                <dependencies>state probe gradient_field</dependencies>
+                <![CDATA[
+                    //ER EI  phi_esR phi_esI  phi_geR phi_geI  phi_gsR phi_gsI  Ni_atoms  grad
+                    _SAMPLE_COMPLEX(E);
+                    //_SAMPLE_COMPLEX(phi_gg);
+                    //_SAMPLE_COMPLEX(phi_ss);
+                    //_SAMPLE_COMPLEX(phi_ee);
+                    //_SAMPLE_COMPLEX(phi_es);
+                    _SAMPLE_COMPLEX(phi_ge);
+                    _SAMPLE_COMPLEX(phi_gs);
+                    _SAMPLE_COMPLEX(phi_ge0);
+                    _SAMPLE_COMPLEX(phi_gs0);
+                    _SAMPLE_COMPLEX(phi_gem1);
+                    _SAMPLE_COMPLEX(phi_gsm1);
+                    //Ni_atoms=Ni;
+                    grad = delta;
+                    ctrl = Omega_t;
+                    detuning = Delta_t;
+                ]]>
+            </sampling>
+        </group>
+    </output>
+</simulation>
