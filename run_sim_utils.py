@@ -31,7 +31,7 @@ def run_Sim(simargs):
     try:
         with open(logfile, "w") as f:
             try:
-                sleep(1)
+                sleep(0.5)
                 print(*cmd, flush=True)
                 run(cmd, timeout=timeout, stdout=f, stderr=f)
             except TimeoutExpired:
@@ -69,12 +69,22 @@ class sim_Pool:
         self.isPoolInit = True
 
     def run_pool(self):
-        self.pool.map(run_Sim, self.args)
-        self.isPoolRunning = True
+        if self.isPoolInit:
+            self.pool.map(run_Sim, self.args)
+            self.isPoolRunning = True
+        else:    
+            print("Pool not initialised, can't run.")
+
 
     def busy_wait_and_close(self):
-        self.pool.close()
-        self.pool.join()
+        if self.isPoolRunning:
+            try:
+                self.pool.close()
+                self.pool.join()
+            except:
+                print("Error")
+        else:
+            print("No pool running")
 
 
 class multi_Sim_Runner(sim_Pool):

@@ -8,16 +8,25 @@ def compile_Sims(dir=getcwd(), sim_file_names=None):
     if sim_file_names == None:
         for file in listdir(dir):
             if file.endswith(".xmds"):
-                run(["xmds2", dir+"/"+file])
+                try:
+                    run(["xmds2", dir+"/"+file])
+                except:
+                    print("Failed to compile:", dir+"/"+file)
     else:
         for f in sim_file_names:
-            run(["xmds2", dir+"/"+f])
+            try:
+                run(["xmds2", dir+"/"+f])
+            except:
+                print("Failed to compile:", dir+"/"+file)            
     return
 
 def remove_unwanted_Files(dir=getcwd(), file_extensions = ['cc']):
     #run("rm " + dir + "/*.xsil", shell=True)
     for e in file_extensions:
-        run("rm " + dir + "/*."+ e, shell=True)
+        try:
+            run("rm " + dir + "/*."+ e, shell=True)
+        except:
+            print("Failed to delete files with extensions:", file_extensions, "in dir:", dir)
     return
 
 def add_to_pckl_list_File(filename, thing_to_add, dir=getcwd()):
@@ -89,23 +98,30 @@ def find_h5_files(directory, sim_nametag):
     for file in listdir(directory):
         if (file[0:namelen] == sim_nametag and file[-3:] == '.h5'):
             file_list.append(file)
-
     if len(file_list) == 0:
         print("No results files matching", sim_nametag, "in dir", directory)
-
     return file_list
 
 def import_h5_data(filename):
-    return h5py.File(filename)
+    try: 
+        f = h5py.File(filename)
+        return f
+    except:
+        print("Couldn't open:", filename)
+    return False
 
 def parse_params_from_h5_filename(filename, flags):
     parsed = dict()
-    
-    for flag in flags:
-        tmp_input_param_str = filename.split(flag)[1].split("_")[1].split(".")[:-1]
+    if len(flags) < 1:
+        print('Flags is empty')
+    else:
+        for flag in flags:
+            tmp_input_param_str = filename.split(flag)[1].split("_")[1].split(".")[:-1]
 
-        if(len(tmp_input_param_str)>1):
-            parsed.update([(flag,float(tmp_input_param_str[0]+'.'+tmp_input_param_str[1]))])
-        else:
-            parsed.update([(flag,float(tmp_input_param_str[0]))])
+            if(len(tmp_input_param_str) == 2):
+                parsed.update([(flag,float(tmp_input_param_str[0]+'.'+tmp_input_param_str[1]))])
+            elif(len(tmp_input_param_str) == 1):
+                parsed.update([(flag,float(tmp_input_param_str[0]))])
+            else:
+                print("Couldn't parse flag:", flag, "from filename:", filename)
     return parsed
