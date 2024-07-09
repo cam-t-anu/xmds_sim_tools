@@ -64,16 +64,20 @@ class sim_Pool:
             self.pool_size = len(self.args)
         else:
             self.pool_size = num_procs
-        
-        self.pool = Pool(self.pool_size)
-        self.isPoolInit = True
+        try: 
+            self.pool = Pool(self.pool_size)
+        except Exception as error:
+            print("Error initialising pool")
+            print(error)
+        else:
+            self.isPoolInit = True
 
     def run_pool(self):
-        if self.isPoolInit:
+        if self.isPoolInit and self.isArgsInit:
             self.pool.map(run_Sim, self.args)
             self.isPoolRunning = True
         else:    
-            print("Pool not initialised, can't run.")
+            print("Pool and/or args not initialised, can't run.")
 
 
     def busy_wait_and_close(self):
@@ -82,7 +86,7 @@ class sim_Pool:
                 self.pool.close()
                 self.pool.join()
             except:
-                print("Error")
+                print("Error waiting for pool")
         else:
             print("No pool running")
 
@@ -91,24 +95,30 @@ class multi_Sim_Runner(sim_Pool):
     def __init__(self, inner_run_settings) -> None:
         super().__init__()
         
-        self.inner_run_settings = inner_run_settings
-        self.fixed_parameters = self.inner_run_settings['fixed_parameters']
-        self.sim_cmd_settings = self.inner_run_settings['sim_cmd_settings']
+        try:
+            self.inner_run_settings = inner_run_settings
+            self.fixed_parameters = self.inner_run_settings['fixed_parameters']
+            self.sim_cmd_settings = self.inner_run_settings['sim_cmd_settings']
 
-        self.num_procs = self.inner_run_settings['sim_procs_num']
-        self.next_run_type = self.inner_run_settings['next_run_type']
+            self.num_procs = self.inner_run_settings['sim_procs_num']
+            self.next_run_type = self.inner_run_settings['next_run_type']
+            
+            self.fixed_parameters_settings = self.fixed_parameters
+            self.fixed_parameters_settings.update(self.sim_cmd_settings)
+
+            if self.next_run_type == 'sweep':
+                self.input_parameters = self.inner_run_settings['input_parameters']
+                self.fixed_parameters.update(self.sim_cmd_settings)
+                self.add_param_sweep(self.fixed_parameters_settings, self.input_parameters)
+            elif self.next_run_type == 'points':
+                self.input_points = self.inner_run_settings['input_points']
+                self.add_points(self.fixed_parameters_settings, self.input_points)
         
-        self.fixed_parameters_settings = self.fixed_parameters
-        self.fixed_parameters_settings.update(self.sim_cmd_settings)
+            self.is_init = True
+        except Exception as error:
+            print("Error initialising the Multi_Sim_Runner")
+            print(error)
 
-        if self.next_run_type == 'sweep':
-            self.input_parameters = self.inner_run_settings['input_parameters']
-            self.fixed_parameters.update(self.sim_cmd_settings)
-            self.add_param_sweep(self.fixed_parameters_settings, self.input_parameters)
-        elif self.next_run_type == 'points':
-            self.input_points = self.inner_run_settings['input_points']
-            self.add_points(self.fixed_parameters_settings, self.input_points)
-        return
     
     def add_param_sweep(self, fixed_params, params_to_sweep):
         keys, values = zip(*params_to_sweep.items())
@@ -125,9 +135,18 @@ class multi_Sim_Runner(sim_Pool):
         return
 
     def do_Run(self):
-        super().init_pool(self.num_procs)
-        super().run_pool()
-        super().busy_wait_and_close()
+        if self.is_init:
+            super().init_pool(self.num_procs)
+            try: 
+                super().run_pool()
+            except Exception as error:
+                print("Error from raised from pool")
+                print(error)
+            else:
+                super().busy_wait_and_close()
+        else:
+            print("Runner not initialised properly, didn't run:")
+            print(self.inner_run_settings)
         return
 
 

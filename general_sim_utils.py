@@ -29,66 +29,73 @@ def remove_unwanted_Files(dir=getcwd(), file_extensions = ['cc']):
             print("Failed to delete files with extensions:", file_extensions, "in dir:", dir)
     return
 
-def add_to_pckl_list_File(filename, thing_to_add, dir=getcwd()):
-    if(path.isfile(dir+'/'+filename)):
-        flag = 'ab'
-    else:
-        flag = 'wb'    
-    try:
-        with open(dir+'/'+filename, flag) as f:
-            try:
-                pickle.dump(thing_to_add, f)
-            except:
-                print("Couldn't write results to", filename)
-                return
-    except:
-        print("Couldn't write to", filename)
-        return    
-
+def add_to_pckl_list_File(filename, thing_to_add, dir=getcwd()):   
+    if len(thing_to_add) == 0:
+        print("No results to print")
+    elif len(filename) == 0:
+        print("No filename given")
+    else:        
+        if(path.isfile(dir+'/'+filename)):
+            flag = 'ab'
+        else:
+            flag = 'wb'    
+        try:
+            with open(dir+'/'+filename, flag) as f:
+                try:
+                    pickle.dump(thing_to_add, f)
+                except:
+                    print("Couldn't write results to", filename)
+        except:
+            print("Couldn't write to", filename)             
     return
 
 
 def print_res_to_CSV(filename, res, dir=getcwd()):
-    if type(res) == dict:
-        res = [res]
-    if(path.isfile(dir+'/'+filename)):
-        flag = 'a'
-        try:
-            with open(dir+'/'+filename, 'r') as f:
-                csv_reader = csv.DictReader(f)
-                keys = csv_reader.fieldnames
-        except:
-            print("Couldn't read header in ", dir+'/'+filename)
-            keys = set().union(*(d.keys() for d in res))
-        try:
-            with open(dir+'/'+filename, flag) as f:
-                try:
-                    csv_writer = csv.DictWriter(f, keys)
-                    
-                except Exception as error:
-                    print(res, keys)
-                    print("Couldn't append results to", filename)
-                    print(error)
-                    return
-                csv_writer.writerows(res)
-        except:
-            print("Couldn't write to existing ", filename)
-            return
+    if len(res) == 0:
+        print("No results to print")
+    elif len(filename) == 0:
+        print("No filename given")
     else:
-        flag = 'w'
-        keys = set().union(*(d.keys() for d in res))
-        try:
-            with open(dir+'/'+filename, flag) as f:
-                try:
-                    csv_writer = csv.DictWriter(f, keys)
-                    csv_writer.writeheader()
+        if type(res) == dict:
+            res = [res]
+        if(path.isfile(dir+'/'+filename)):
+            flag = 'a'
+            try:
+                with open(dir+'/'+filename, 'r') as f:
+                    csv_reader = csv.DictReader(f)
+                    keys = csv_reader.fieldnames
+            except:
+                print("Couldn't read header in ", dir+'/'+filename)
+                keys = set().union(*(d.keys() for d in res))
+            try:
+                with open(dir+'/'+filename, flag) as f:
+                    try:
+                        csv_writer = csv.DictWriter(f, keys)
+                        
+                    except Exception as error:
+                        print(res, keys)
+                        print("Couldn't append results to file:", filename)
+                        print(error)
+                        return
                     csv_writer.writerows(res)
-                except:
-                    print("Couldn't write results to", filename)
-                    return
-        except:
-            print("Couldn't write to", filename)
-            return    
+            except:
+                print("Couldn't write to existing file:", filename)
+                return
+        else:
+            flag = 'w'
+            keys = set().union(*(d.keys() for d in res))
+            try:
+                with open(dir+'/'+filename, flag) as f:
+                    try:
+                        csv_writer = csv.DictWriter(f, keys)
+                        csv_writer.writeheader()
+                        csv_writer.writerows(res)
+                    except:
+                        print("Couldn't write results to", filename)
+                        return
+            except:
+                print("Couldn't write to", filename)
+                return    
     return
 
 

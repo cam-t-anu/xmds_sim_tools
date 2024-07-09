@@ -7,28 +7,41 @@ from multiprocessing import Pool
 
 class multi_Sim_Analyser:
     def __init__(self, analysis_settings) -> None:
-        self.analysis_swttings = analysis_settings
         
-        self.flags = analysis_settings['flags']
-        self.numprocs = analysis_settings['num_analysis_procs']
-        self.in_pulse_end_time = analysis_settings['in_pulse_end_time']
-        self.out_pulse_start_time = analysis_settings['out_pulse_start_time']
-        self.results_file_nametag = analysis_settings['results_file_nametag']
-        self.sim_directory = analysis_settings['sim_directory']
-        
+        try:
+            self.analysis_settings = analysis_settings
+            
+            self.flags = analysis_settings['flags']
+            self.numprocs = analysis_settings['num_analysis_procs']
+            self.in_pulse_end_time = analysis_settings['in_pulse_end_time']
+            self.out_pulse_start_time = analysis_settings['out_pulse_start_time']
+            self.results_file_nametag = analysis_settings['results_file_nametag']
+            self.sim_directory = analysis_settings['sim_directory']
+        except Exception as error:
+            print("Error parsing analysis settings:")
+            print(analysis_settings)
+            print(error)
+
         self.args_list = []
         self.results = []
         self.h5filenames = []
         self.numfiles = 0
+        self.is_init = False
         
 
     def get_all_sim_files_in_dir(self):
         self.h5filenames = find_h5_files(self.sim_directory, self.results_file_nametag)
         self.numfiles = len(self.h5filenames)
+        if self.numfiles > 0:
+            self.is_init = True
+        else:
+            print("No sim files matching", self.results_file_nametag, "found in" , self.sim_directory)
 
     def add_sim_files_to_analyse(self, filenames):
         self.h5filenames = filenames
         self.numfiles = len(self.h5filenames)
+        if self.numfiles > 0:
+            self.is_init = True
 
     def init_pool(self):
         if self.numprocs == 0:
@@ -41,19 +54,29 @@ class multi_Sim_Analyser:
         for n in self.h5filenames:
             self.args_list.append([n, self.in_pulse_end_time, self.out_pulse_start_time])
         
-    def parse_results_into_dict(self):
+    def parse_results_into_list_of_dicts(self):
         for result in self.results:
             result.update(parse_params_from_h5_filename(result["Filename"], self.flags))
 
     def run_multi_Sim_Analysis(self):
-        self.init_args()
-        self.init_pool()
-        self.results = self.analysers.map(calc_efficiency, self.args_list)
-        if self.results == []:
-            print("No analysis results for: ", self.args_list)
-        self.analysers.close()
-        self.analysers.join()
-        self.parse_results_into_dict()
+        if self.is_init == True:
+            try:
+                self.init_args()
+                self.init_pool()
+                self.results = self.analysers.map(calc_efficiency, self.args_list)
+                self.analysers.close()
+                self.analysers.join()
+                if self.results == []:
+                    print("No analysis results for: ", self.args_list)
+                else:
+                    self.parse_results_into_list_of_dicts()
+            except Exception as error:
+                print("Error raised during analysis of:")
+                print(self.args_list)
+                print(error)
+        else:
+            print("Analyser not initialised")
+            print(self.analysis_settings)
 
 
 def calc_Emag(Data):

@@ -32,18 +32,8 @@ class sim_Optimiser:
 
         self.current_round = 0
         self.fixed_params = []
-        self.flags = []
-        self.in_pulse_end_time = 0
-        self.out_pulse_start_time = 0
 
         self.initial_params_to_sweep = []
-
-
-    def add_fixed_params(self, fixed_params):
-        self.fixed_params = fixed_params
-
-    def add_initial_sweep_params(self, initial_params_to_sweep):
-        self.initial_params_to_sweep = initial_params_to_sweep
 
     def isInit(self):
         if (self.fixed_params != [] and self.flags != [] and self.optimisation_paramters != {} and self.sim_nametag != ''):
@@ -59,14 +49,26 @@ class sim_Optimiser:
         self.MSA = multi_Sim_Analyser(self.analysis_settings)
         self.MSA.get_all_sim_files_in_dir()
         self.MSA.run_multi_Sim_Analysis()
-        self.round_results = self.MSA.results
+        if len(self.MSA.results) > 0:
+            self.round_results = self.MSA.results
+        else:
+            print("No results from analyser")
+            print(self.analysis_settings)
+
 
     def do_Round_Optimisation(self):
-        #print("Analysis results:", self.round_results)
-        Op = self.Optimiser(self.round_results, self.current_round, self.optimiser_settings)
-        Op.go()
-        #print(Op.next_run)
-        self.inner_run_settings.update(Op.next_run)
+        try:
+            if len(self.round_results) == 0:
+                print("No current round results to optimise, this will probably cause an error")
+            Op = self.Optimiser(self.round_results, self.current_round, self.optimiser_settings)
+            Op.go()
+            self.inner_run_settings.update(Op.next_run)
+        except Exception as error:
+            print("An error occured in optimisation round: ", self.current_round)
+            print("Inputs: ", self.round_results)
+            print("Settings: ", self.optimiser_settings)
+            print("Error: ", error)
+
 
     def do_Round(self):
         self.current_round += 1
@@ -78,7 +80,11 @@ class sim_Optimiser:
         self.do_Round_Optimisation()
 
     def get_optimal_point(self):
-        self.optimal_point = sorted(self.optimiser_results, key=lambda x: x['Efficiency'], reverse=True)[0]
+        try: 
+            self.optimal_point = sorted(self.optimiser_results, key=lambda x: x['Efficiency'], reverse=True)[0]
+        except Exception as error:
+            print("Error getting optimal point")
+            print(error)
 
     def save_optimal_point(self):
         print_res_to_CSV("optimal_points.csv", self.optimal_point, self.sim_directory)
@@ -86,7 +92,7 @@ class sim_Optimiser:
     def save_optimisation_results(self):
         print_res_to_CSV("optimisation_results.csv", self.optimiser_results, self.sim_directory)
 
-    def do_Opimisation(self):
+    def do_Optimisation(self):
         for _ in range(self.rounds):
             self.do_Round()
         
@@ -121,11 +127,29 @@ class sim_Optimisation_Sweeper:
 
     def do_Optimisation_Sweep(self):
         for i in self.outer_sweep_values:
-            self.inner_run_settings['fixed_parameters'].update({self.outer_sweep_parameter:i})
-            self.SimOpt = sim_Optimiser(self.inner_run_settings, self.analysis_settings, self.optimiser_settings, self.sim_directory)
-            self.SimOpt.do_Opimisation()
+            try:
+                self.inner_run_settings['fixed_parameters'].update({self.outer_sweep_parameter:i})
+                self.SimOpt = sim_Optimiser(self.inner_run_settings, self.analysis_settings, self.optimiser_settings, self.sim_directory)
+            except Exception as error:
+                print("Error initialising sim_Optimiser")
+                print("Outer sweep val:", i)
+                print(self.inner_run_settings, self.analysis_settings, self.optimiser_settings, self.sim_directory)
+                print(error)
+            else: 
+                try:
+                    self.SimOpt.do_Optimisation()
+                except Exception as error:
+                    print("Error in optimisation run")
+                    print(self.inner_run_settings, self.analysis_settings, self.optimiser_settings, self.sim_directory)
+                    print(error)
+
             if self.do_outer_routine:
-                self.outer_routine(self)
+                try:
+                    self.outer_routine(self)
+                except Exception as error:
+                    print("Error in outer routine", self.outer_routine)
+                    print(error)
+
             remove_unwanted_Files(dir=self.sim_directory, file_extensions=['xsil', 'h5', 'pckl'])
 
 
