@@ -119,13 +119,21 @@ class sim_Optimisation_Sweeper:
         else:
             self.outer_routine = None
             self.do_outer_routine = False
+
+        if 'sim_xmds_filename' in self.outer_sweep_settings.keys():
+            self.sim_xmds_filename = self.outer_sweep_settings['sim_xmds_filename']
+        else:
+            self.sim_xmds_filename = None
+
         self.prepare_sims()
         
     def prepare_sims(self):
-        compile_Sims(dir=self.sim_directory)
+        compile_Sims(dir=self.sim_directory, sim_file_name=self.sim_xmds_filename)
         remove_unwanted_Files(dir=self.sim_directory)
 
     def do_Optimisation_Sweep(self):
+        if isinstance(self.outer_sweep_values, int) or isinstance(self.outer_sweep_values, float):
+            self.outer_sweep_values = [self.outer_sweep_values]
         for i in self.outer_sweep_values:
             try:
                 self.inner_run_settings['fixed_parameters'].update({self.outer_sweep_parameter:i})

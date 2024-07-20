@@ -1,7 +1,7 @@
 #!/usr/bin/python3
-import sys
-sys.path.append('/home/cam/Sims-Repo/XMDS2/new_GEM')
+
 import time
+from os import getcwd
 import numpy as np
 from sim_optimisation import sim_Optimisation_Sweeper
 
@@ -17,14 +17,13 @@ def do_sim_Run():
     in_pulse_end_time = 0.35*tmax
     out_pulse_start_time = 0.65*tmax
 
-    sim_directory = '/home/cam/Sims-Repo/XMDS2/new_GEM/EIT_GEM'
-
-    #flags = ['De', 'Om', 'Pw','Tin','c0','c1','c2','c3','c4','dm','gf','lds','ldw','tgap']
+    sim_directory = getcwd()
 
     outer_sweep_settings = {
         'parameter':        'De',
-        'values':           list(np.linspace(5,15,5)),
-        'outer_routine':    outer_routine 
+        'values':           26,
+        'outer_routine':    outer_routine, 
+        'sim_xmds_filename': '1DGEM3L_new.xmds'
     }
 
     inner_run_settings = {
@@ -40,33 +39,34 @@ def do_sim_Run():
             'Pw':   'default',
             'Tin':  'default',
             'tgap': 'default',
+            'Np': 'default',
         },
         'input_parameters':     {
-            'dm':   list(np.linspace(0.1, 8, 4)), 
-            'Om':   list(np.linspace(0.1, 8, 4))
+            'dm':   list(np.linspace(0.1, 12, 4)), 
+            'Om':   list(np.linspace(0.1, 12, 5))
         },
         'input_points': [],
         'sim_cmd_settings':     {
             "log":              "timeouts_only",
             "timeout":          10*60,
-            "sim_name":         '1DGEM-EIT.out',
+            "sim_name":         '1DGEM3L_new.out',
         },
         'sim_procs_num':    10,
         'next_run_type':    'sweep'
     }
 
     analysis_settings = {
-        'flags':                ['De', 'Om', 'Pw','Tin','c0','c1','c2','c3','c4','dm','gf','lds','ldw','tgap'],
+        'flags':                ['De', 'Om', 'Pw','Tin','c0','c1','c2','c3','c4','dm','gf','lds','ldw','tgap','Np'],
         'in_pulse_end_time':    in_pulse_end_time,
         'out_pulse_start_time': out_pulse_start_time,
-        'results_file_nametag': '1Dgem-eit',
+        'results_file_nametag': '1DGEM3L_new',
         'num_analysis_procs':   5,
         'sim_directory':        sim_directory
     }
 
     optimiser_settings = {
         'optimiser_version':    3,
-        'optimisation_rounds':  4,
+        'optimisation_rounds':  2,
         'cost':                 'Efficiency',
         'maximise_cost':        True,
         'valid_cost_range':     [0,1],

@@ -6,6 +6,14 @@ import math
 import pickle
 from os import getcwd
 
+def log_progress(str):
+    try:
+        with open("optimisation_log.txt", 'a') as f:
+            f.writelines(str)
+    except Exception as error:
+        print("Unable to write progrss to optimisation_log.txt")
+        print(error)
+
 
 def is_subset_Dicts(dict1, dict2):
     ##is dict1 a subset of dict2

@@ -4,8 +4,8 @@ import pickle
 import csv
 import h5py
 
-def compile_Sims(dir=getcwd(), sim_file_names=None):
-    if sim_file_names == None:
+def compile_Sims(dir=getcwd(), sim_file_name=None):
+    if sim_file_name == None:
         for file in listdir(dir):
             if file.endswith(".xmds"):
                 try:
@@ -13,11 +13,10 @@ def compile_Sims(dir=getcwd(), sim_file_names=None):
                 except:
                     print("Failed to compile:", dir+"/"+file)
     else:
-        for f in sim_file_names:
-            try:
-                run(["xmds2", dir+"/"+f])
-            except:
-                print("Failed to compile:", dir+"/"+file)            
+        try:
+            run(["xmds2", dir+"/"+sim_file_name])
+        except:
+            print("Failed to compile:", dir+"/"+file)            
     return
 
 def remove_unwanted_Files(dir=getcwd(), file_extensions = ['cc']):
