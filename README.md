@@ -8,7 +8,7 @@ Tools to help make xmds simulations more useful
   * input parameters defined as arguments
   * \<arguments append_args_to_output_filename="yes"\> so that the analysis can parse out the input argunents
   * hdf5 output files with all the required data to evaluate your cost function
-  * See 1DGEM-EIT.xmds for an example
+  * See 1DGEM3L_new.xmds for an example
 
 ### You will need to write
 * A top level simulation running script that includes some or all of:
@@ -16,7 +16,7 @@ Tools to help make xmds simulations more useful
     * inner_run_settings - these are paramters that help the framework run your simulation and includes the initial input values
     * analysis_settings - help the analyser parse the hdf5 output filenames, and evaluate the cost function
     * optimiser_settings - defines optimisation parameters, and other helpful parameters for optimisation 
-    * see eit_gem_sims.py for an example format
+    * see optimise_1DGEM3L_new.py for an example format
 
 ### You will likely want to write
 * Your own cost function calulator 
