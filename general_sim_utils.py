@@ -99,21 +99,27 @@ def print_res_to_CSV(filename, res, dir=getcwd()):
 
 
 def find_h5_files(directory, sim_nametag):
-    namelen = len(sim_nametag)
-    file_list = []
-    for file in listdir(directory):
-        if (file[0:namelen] == sim_nametag and file[-3:] == '.h5'):
-            file_list.append(file)
-    if len(file_list) == 0:
-        print("No results files matching", sim_nametag, "in dir", directory)
-    return file_list
+    try:
+        namelen = len(sim_nametag)
+        file_list = []
+        for file in listdir(directory):
+            if (file[0:namelen] == sim_nametag and file[-3:] == '.h5'):
+                file_list.append(file)
+        if len(file_list) == 0:
+            print("No results files matching", sim_nametag, "in dir", directory)
+        return file_list
+    except Exception as error:
+        print("Couldn't find files matching", sim_nametag, "in dir", directory)
+        print(error)
+        return []
 
 def import_h5_data(filename):
     try: 
         f = h5py.File(filename)
         return f
-    except:
+    except Exception as error:
         print("Couldn't open:", filename)
+        print(error)
     return False
 
 def parse_params_from_h5_filename(filename, flags):
@@ -122,12 +128,16 @@ def parse_params_from_h5_filename(filename, flags):
         print('Flags is empty')
     else:
         for flag in flags:
-            tmp_input_param_str = filename.split(flag)[1].split("_")[1].split(".")[:-1]
+            try:
+                tmp_input_param_str = filename.split(flag)[1].split("_")[1].split(".")[:-1]
 
-            if(len(tmp_input_param_str) == 2):
-                parsed.update([(flag,float(tmp_input_param_str[0]+'.'+tmp_input_param_str[1]))])
-            elif(len(tmp_input_param_str) == 1):
-                parsed.update([(flag,float(tmp_input_param_str[0]))])
-            else:
+                if(len(tmp_input_param_str) == 2):
+                    parsed.update([(flag,float(tmp_input_param_str[0]+'.'+tmp_input_param_str[1]))])
+                elif(len(tmp_input_param_str) == 1):
+                    parsed.update([(flag,float(tmp_input_param_str[0]))])
+                else:
+                    print("Couldn't parse flag:", flag, "from filename:", filename)
+            except Exception as error:
                 print("Couldn't parse flag:", flag, "from filename:", filename)
+                print(error)
     return parsed

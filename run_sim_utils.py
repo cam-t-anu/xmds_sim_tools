@@ -121,17 +121,25 @@ class multi_Sim_Runner(sim_Pool):
 
     
     def add_param_sweep(self, fixed_params, params_to_sweep):
-        keys, values = zip(*params_to_sweep.items())
-        args_array = [dict(zip(keys, v)) for v in product(*values)]
-        for d in args_array:
-            d.update(fixed_params)
-        super().init_args(args_array)
+        try:
+            keys, values = zip(*params_to_sweep.items())
+            args_array = [dict(zip(keys, v)) for v in product(*values)]
+            for d in args_array:
+                d.update(fixed_params)
+            super().init_args(args_array)
+        except Exception as error:
+            print("Error adding parameter sweep")
+            print(error)
         return
 
     def add_points(self, fixed_params, points):
-        for point in points:
-            point.update(fixed_params)
-        super().init_args(points)
+        try:
+            for point in points:
+                point.update(fixed_params)
+            super().init_args(points)
+        except Exception as error:
+            print("Error adding points")
+            print(error)
         return
 
     def do_Run(self):

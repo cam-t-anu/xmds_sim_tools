@@ -1,4 +1,6 @@
 #!/usr/bin/python3
+from os import getcwd
+
 import numpy as np
 from general_sim_utils import import_h5_data, find_h5_files, parse_params_from_h5_filename
 from multiprocessing import Pool
@@ -55,8 +57,12 @@ class multi_Sim_Analyser:
             self.args_list.append([n, self.in_pulse_end_time, self.out_pulse_start_time])
         
     def parse_results_into_list_of_dicts(self):
-        for result in self.results:
-            result.update(parse_params_from_h5_filename(result["Filename"], self.flags))
+        try:
+            for result in self.results:
+                result.update(parse_params_from_h5_filename(result["Filename"], self.flags))
+        except Exception as error:
+            print("Error parsing results into list of dictionaries:")
+            print(error)
 
     def run_multi_Sim_Analysis(self):
         if self.is_init == True:
@@ -111,32 +117,45 @@ def calc_efficiency(args):
         print("Error importing", filename)
         return 0
 
-    Emag = calc_Emag(f)
-    t = f['1/t'][:]
-    in_power = integrate_in_pulse_1D_sim(Emag, t, in_pulse_end_time)
-    out_power = integrate_out_pulse_1D_sim(Emag, t, out_pulse_start_time)
-    if (in_power > 0):
-        efficiency = out_power/in_power
-    else:
-        efficiency = 0
-    
-    return {"Filename":filename,"Efficiency":efficiency}
+    try:
+        Emag = calc_Emag(f)
+        t = f['1/t'][:]
+        in_power = integrate_in_pulse_1D_sim(Emag, t, in_pulse_end_time)
+        out_power = integrate_out_pulse_1D_sim(Emag, t, out_pulse_start_time)
+        if (in_power > 0):
+            efficiency = out_power/in_power
+        else:
+            efficiency = 0
+        return {"Filename": filename, "Efficiency": efficiency}
+    except Exception as error:
+        print("Error calculating efficiency for", filename)
+        print(error)
+        return {"Filename": filename, "Efficiency": 0}
 
 
 
 def main():
 
-    in_pulse_end_time = 1.37e-6
-    out_pulse_start_time = 2.54e-6
+    tchar = 86.957e-09
+    tmax = 575*tchar
 
-    flags = ['dm', 'De', 'Om', 'Tin', 'tgap']
+    in_pulse_end_time = 0.35*tmax
+    out_pulse_start_time = 0.52*tmax
+    sim_directory = getcwd()
 
-    M = multi_Sim_Analyser(flags, in_pulse_end_time, out_pulse_start_time, 10)
+    analysis_settings = {
+        'flags':                ['De', 'Np', 'Ome', 'Omg', 'Pw', 'Tin', 'c0', 'gf', 'lds', 'ldw', 'tgap', 'a0', 'a1', 'am1', 'pdiff', 'pmdiff', 'gft', 'gr'],
+        'in_pulse_end_time':    in_pulse_end_time,
+        'out_pulse_start_time': out_pulse_start_time,
+        'results_file_nametag': '1Dgem_pump_eff',
+        'num_analysis_procs':   5,
+        'sim_directory':        sim_directory
+    }
+
+    M = multi_Sim_Analyser(analysis_settings)
     M.get_all_sim_files_in_dir()
-    M.run_multi_Sim_Analysis()
-    print(M.results)
-    
-    #print(sorted(results.items(), key=lambda x: x[1], reverse=True))
+    M.run_multi_Sim_Analysis()    
+    print(sorted(M.results, key=lambda x: x['Efficiency'], reverse=True))
     
 if __name__ == "__main__":
     main()
