@@ -1,0 +1,13 @@
+*.h5
+*.xsil
+*.out
+*.log
+*.csv
+
+__pycache__/
+*.pyc
+*.pkl
+
+*.cc
+*.png
+*.pdf

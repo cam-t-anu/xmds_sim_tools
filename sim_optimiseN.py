@@ -1,21 +1,23 @@
 #!/usr/bin/python3
 """
-Fruit Fly Optimisation (FOA) – 2-D parameter search.
+Fruit Fly Optimisation (FOA) – N-dimensional parameter search.
 
-The algorithm moves a swarm of sample points ("flies") through a 2-D parameter
-space guided by two forces computed in normalised [0, 1] coordinates:
+The algorithm moves a swarm of sample points ("flies") through an N-dimensional
+parameter space guided by two forces, computed in normalised [0, 1] coordinates
+along each axis:
 
   Attraction  – toward evaluated points with a higher cost score.
   Repulsion   – away from evaluated points with a lower cost score.
 
-Both forces are weighted by the magnitude of the score difference and by
-distance (attraction saturates via mod_sigmoid; repulsion decays exponentially).
+Forces are accumulated as Cartesian vectors (not angles), which generalises
+cleanly beyond 2-D.  Both are weighted by score difference and distance
+(attraction saturates via mod_sigmoid; repulsion decays exponentially).
 An adaptive random noise term is added at each step — largest when the directed
 move is small — which helps flies escape local optima.
 
 Typical usage
 -------------
-    Op = Optimise3(results, current_round, optimiser_settings)
+    Op = OptimiseN(results, current_round, optimiser_settings)
     Op.go()   # updates Op.next_run with next-round input points
 """
 
@@ -66,36 +68,25 @@ def _fill_in_dict_list(sparse_list, full_list):
 # Math helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _dist(p1, p2, x, y):
-    """Euclidean distance between two parameter-dicts along the *x* and *y* axes."""
-    dx = p1[x] - p2[x]
-    dy = p1[y] - p2[y]
-    return math.sqrt(dx * dx + dy * dy)
+def _dist_nd(p1, p2, params):
+    """Euclidean distance between two parameter-dicts over all axes in *params*."""
+    return math.sqrt(sum((p1[p] - p2[p]) ** 2 for p in params))
 
 
-def _angle(from_pt, to_pt, x, y):
-    """Angle in radians from *from_pt* toward *to_pt* in the *x*-*y* plane."""
-    dx = to_pt[x] - from_pt[x]
-    dy = to_pt[y] - from_pt[y]
-    return math.atan2(dy, dx) if (dx != 0 or dy != 0) else 0.0
-
-
-def _add_polar(r1, a1, r2, a2):
+def _unit_vector_nd(from_pt, to_pt, params):
     """
-    Add two 2-D vectors in polar form and return ``{"length": r, "angle": a}``.
+    Unit vector from *from_pt* toward *to_pt* as a numpy array indexed by
+    the order of *params*.  Returns a zero vector when the points coincide.
     """
-    nx = r1 * math.cos(a1) + r2 * math.cos(a2)
-    ny = r1 * math.sin(a1) + r2 * math.sin(a2)
-    r = math.sqrt(nx * nx + ny * ny)
-    a = math.atan2(ny, nx) if (nx != 0 or ny != 0) else 0.0
-    return {"length": r, "angle": a}
+    diff = np.array([to_pt[p] - from_pt[p] for p in params], dtype=float)
+    norm = np.linalg.norm(diff)
+    return diff / norm if norm > 1e-12 else np.zeros(len(params))
 
 
 def _mod_sigmoid(x, limit):
     """
     Sigmoid scaled so the output ∈ (-limit, limit) and f(0) = 0.
-    Used to saturate cumulative crawl distances so no single interaction
-    dominates the net step direction.
+    Saturates cumulative force magnitudes so no single interaction dominates.
     """
     return 2 * limit / (1 + math.exp(-2 * x / limit)) - limit
 
@@ -128,28 +119,23 @@ def _repulse_weight_z(ref_pt, cmp_pt, z):
     return min(max(ref_pt[z] - cmp_pt[z], 0.0), 1.0)
 
 
-def _attract_weight_dist(ref_pt, cmp_pt, crawl_speed, x, y):
-    """
-    Distance weight for attraction: mod_sigmoid of Euclidean separation.
-    Rises from 0 at zero separation and saturates around *crawl_speed*.
-    """
-    return _mod_sigmoid(_dist(ref_pt, cmp_pt, x, y), crawl_speed)
-
-
-def _attraction(ref_pt, cmp_pt, crawl_speed, x, y, z):
+def _attraction_magnitude(ref_pt, cmp_pt, crawl_speed, params, z):
     """
     Attraction step magnitude toward *cmp_pt*.
 
-    = crawl_speed × dist_weight × z_gain_weight.
+    = crawl_speed × mod_sigmoid(dist, crawl_speed) × z_gain_weight.
 
     Non-zero only when *cmp_pt* scores higher than *ref_pt*.
     """
-    return (crawl_speed
-            * _attract_weight_dist(ref_pt, cmp_pt, crawl_speed, x, y)
-            * _attract_weight_z(ref_pt, cmp_pt, z))
+    w_z = _attract_weight_z(ref_pt, cmp_pt, z)
+    if w_z == 0.0:
+        return 0.0
+    d = _dist_nd(ref_pt, cmp_pt, params)
+    w_dist = _mod_sigmoid(d, crawl_speed)
+    return crawl_speed * w_dist * w_z
 
 
-def _repulsion(ref_pt, cmp_pt, crawl_speed, x, y, z):
+def _repulsion_magnitude(ref_pt, cmp_pt, crawl_speed, params, z):
     """
     Repulsion step magnitude away from *cmp_pt*.
 
@@ -161,7 +147,7 @@ def _repulsion(ref_pt, cmp_pt, crawl_speed, x, y, z):
     w_z = _repulse_weight_z(ref_pt, cmp_pt, z)
     if w_z == 0.0:
         return 0.0
-    d = _dist(ref_pt, cmp_pt, x, y)
+    d = _dist_nd(ref_pt, cmp_pt, params)
     w_dist = math.exp(-d / max(crawl_speed, 1e-9))
     return crawl_speed * w_dist * w_z
 
@@ -170,26 +156,25 @@ def _repulsion(ref_pt, cmp_pt, crawl_speed, x, y, z):
 # Coordinate normalisation
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _compute_normalisation(all_points, x, y, bounds):
+def _compute_normalisation(all_points, params, bounds):
     """
-    Return ``(x_origin, x_scale, y_origin, y_scale)`` that maps physical
-    coordinates to ~[0, 1].
+    Return ``(origins, scales)`` dicts mapping each parameter name to its
+    origin and scale so that coordinates map to ~[0, 1] along every axis.
 
     Prefer *bounds* when provided; otherwise derives the range from *all_points*.
-    Normalising before computing distances and angles prevents axes with very
-    different physical ranges from distorting the crawl direction.
+    Normalising prevents axes with very different physical ranges from
+    distorting the direction of the net force vector.
     """
-    if bounds and x in bounds and y in bounds:
-        x_lo, x_hi = bounds[x]
-        y_lo, y_hi = bounds[y]
-    else:
-        xs = [p[x] for p in all_points if x in p]
-        ys = [p[y] for p in all_points if y in p]
-        x_lo, x_hi = (min(xs), max(xs)) if len(xs) > 1 else (0.0, 1.0)
-        y_lo, y_hi = (min(ys), max(ys)) if len(ys) > 1 else (0.0, 1.0)
-    x_scale = max(x_hi - x_lo, 1e-9)
-    y_scale = max(y_hi - y_lo, 1e-9)
-    return x_lo, x_scale, y_lo, y_scale
+    origins, scales = {}, {}
+    for p in params:
+        if bounds and p in bounds:
+            lo, hi = bounds[p]
+        else:
+            vals = [pt[p] for pt in all_points if p in pt]
+            lo, hi = (min(vals), max(vals)) if len(vals) > 1 else (0.0, 1.0)
+        origins[p] = lo
+        scales[p] = max(hi - lo, 1e-9)
+    return origins, scales
 
 
 def _clamp_to_bounds(val, param, bounds):
@@ -201,76 +186,74 @@ def _clamp_to_bounds(val, param, bounds):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Core crawl step
+# Core crawl step (N-dimensional)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _do_crawl(ref_pt, step_dist, step_angle, x, y, noise_scale=0.05):
+def _do_crawl_nd(ref_pt, step_mag, step_dir, params, noise_scale=0.05):
     """
-    Displace *ref_pt* by a directed step plus an adaptive random noise term.
+    Displace *ref_pt* by a directed step plus an adaptive random noise term in N-D.
 
-    Noise magnitude = ``noise_scale × exp(-step_dist / noise_scale)``:
+    *step_dir* is a unit numpy array of length ``len(params)``.
+
+    Noise magnitude = ``noise_scale × exp(-step_mag / noise_scale)``:
     maximum when the directed step is near zero (fly near a local optimum),
-    decaying to ~0 for large directed steps, so exploration is concentrated
-    where it is needed most.
+    decaying to ~0 for large directed steps.  Noise direction is a uniformly
+    random unit vector in the N-D space.
 
     Operates in normalised [0, 1] space.  The caller denormalises and clamps to
-    parameter bounds.
-
-    Returns a dict with updated *x* and *y* values.
+    parameter bounds.  Returns a dict with updated parameter values.
     """
-    noise_mag = noise_scale * math.exp(-step_dist / max(noise_scale, 1e-9))
-    noise_angle = np.random.uniform(-np.pi, np.pi)
-    total = _add_polar(step_dist, step_angle, noise_mag, noise_angle)
-    return {
-        x: ref_pt[x] + total["length"] * math.cos(total["angle"]),
-        y: ref_pt[y] + total["length"] * math.sin(total["angle"]),
-    }
+    noise_mag = noise_scale * math.exp(-step_mag / max(noise_scale, 1e-9))
+    noise_raw = np.random.randn(len(params))
+    noise_norm = np.linalg.norm(noise_raw)
+    noise_dir = noise_raw / noise_norm if noise_norm > 1e-12 else np.zeros(len(params))
+
+    total_vec = step_mag * step_dir + noise_mag * noise_dir
+    result = dict(ref_pt)
+    for i, p in enumerate(params):
+        result[p] = ref_pt[p] + total_vec[i]
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main optimisation step
 # ─────────────────────────────────────────────────────────────────────────────
 
-def crawl_optimise(current_points, all_points, crawl_speed, input_params, input_dims,
+def crawl_optimise(current_points, all_points, crawl_speed, input_params,
                    z, bounds=None, noise_scale=0.05, repulsion_scale=0.5):
     """
-    Compute one FOA step for every fly in *current_points*.
+    Compute one FOA step for every fly in *current_points* (N-dimensional).
 
-    For each fly, sums attraction vectors toward higher-scoring evaluated
-    points and repulsion vectors away from lower-scoring ones, then moves the
-    fly one step along the net resultant.  All geometry is computed in
-    normalised [0, 1] space so axes with different physical scales contribute
-    equally.  Results are denormalised and clamped to *bounds* before being
-    returned.
+    For each fly, accumulates attraction vectors (toward higher-scoring points)
+    and repulsion vectors (away from lower-scoring points) as Cartesian force
+    vectors, then moves the fly one step along the net resultant direction.
+    All geometry is computed in normalised [0, 1] space.  Results are
+    denormalised and clamped to *bounds* before being returned.
 
     Args:
         current_points:  list of dicts – flies to move this step.
         all_points:      list of dicts – all evaluated points (including current).
         crawl_speed:     base step size in normalised space (0–1).
-        input_params:    [x_param, y_param] – names of the two axes.
-        input_dims:      must be 2.
+        input_params:    list of N parameter names to optimise over.
         z:               key name of the cost/efficiency field.
         bounds:          dict mapping param → [min, max] in physical units.
         noise_scale:     random exploration amplitude in normalised space.
         repulsion_scale: fraction of attraction strength applied as repulsion.
 
     Returns:
-        List of dicts with new x/y values for each fly, or [] on error.
+        List of dicts with updated parameter values for each fly, or [] on error.
     """
-    if input_dims != 2:
-        print("crawl_optimise requires exactly 2 input dimensions")
-        return []
     if not all_points:
         print("crawl_optimise: all_points is empty")
         return []
 
-    x, y = input_params[0], input_params[1]
-    x_origin, x_scale, y_origin, y_scale = _compute_normalisation(all_points, x, y, bounds)
+    params = input_params
+    origins, scales = _compute_normalisation(all_points, params, bounds)
 
     def _norm(pt):
         n = dict(pt)
-        n[x] = (pt[x] - x_origin) / x_scale
-        n[y] = (pt[y] - y_origin) / y_scale
+        for p in params:
+            n[p] = (pt[p] - origins[p]) / scales[p]
         return n
 
     all_pts_norm = [_norm(p) for p in all_points]
@@ -278,26 +261,29 @@ def crawl_optimise(current_points, all_points, crawl_speed, input_params, input_
 
     new_pts = []
     for ref_orig, ref_n in zip(current_points, cur_pts_norm):
-        net = {"length": 0.0, "angle": 0.0}
+        net_force = np.zeros(len(params))
 
         for cmp_orig, cmp_n in zip(all_points, all_pts_norm):
             if cmp_orig is ref_orig:
                 continue
-            angle = _angle(ref_n, cmp_n, x, y)
-            attract = _attraction(ref_n, cmp_n, crawl_speed, x, y, z)
-            net = _add_polar(net["length"], net["angle"], attract, angle)
-            repel = repulsion_scale * _repulsion(ref_n, cmp_n, crawl_speed, x, y, z)
-            net = _add_polar(net["length"], net["angle"], repel, angle + math.pi)
+            direction = _unit_vector_nd(ref_n, cmp_n, params)
+            attract = _attraction_magnitude(ref_n, cmp_n, crawl_speed, params, z)
+            net_force += attract * direction
+            repel = repulsion_scale * _repulsion_magnitude(ref_n, cmp_n, crawl_speed, params, z)
+            net_force -= repel * direction  # opposite direction
+
+        net_mag = float(np.linalg.norm(net_force))
+        net_dir = net_force / net_mag if net_mag > 1e-12 else np.zeros(len(params))
 
         # Saturate step size and slow flies already near the optimum.
         ref_z = ref_orig.get(z, 0)
-        step = (_mod_sigmoid(net["length"], 4 * crawl_speed)
+        step = (_mod_sigmoid(net_mag, 4 * crawl_speed)
                 * _mod_flipped_sigmoid(ref_z, 4 / crawl_speed))
 
-        crawled = _do_crawl(ref_n, step, net["angle"], x, y, noise_scale)
-        new_x = _clamp_to_bounds(crawled[x] * x_scale + x_origin, x, bounds)
-        new_y = _clamp_to_bounds(crawled[y] * y_scale + y_origin, y, bounds)
-        new_pts.append({x: new_x, y: new_y})
+        crawled = _do_crawl_nd(ref_n, step, net_dir, params, noise_scale)
+        new_pt = {p: _clamp_to_bounds(crawled[p] * scales[p] + origins[p], p, bounds)
+                  for p in params}
+        new_pts.append(new_pt)
 
     return new_pts
 
@@ -330,21 +316,19 @@ def _load_pckl(filename):
 # Visualisation
 # ─────────────────────────────────────────────────────────────────────────────
 
-def visualize_search_history(x_param, y_param, z_param,
-                              history_file=None, save_path=None, show=True):
+def visualize_search_history(z_param, history_file=None, save_path=None, show=True):
     """
-    Plot how optimiser flies moved through the search space across rounds.
+    Plot the cost score of every fly over rounds.
 
-    Background squares show every evaluated point coloured by cost (viridis).
-    Coloured dots (plasma: early rounds blue → late rounds red) mark each fly's
-    position per round; black lines and red arrows trace the trajectory.
+    X-axis: round number.
+    Y-axis: cost (z_param) for each fly.
+    Each fly is drawn as a separate line with circular markers.
 
     Args:
-        x_param, y_param: parameter names for the plot axes.
-        z_param:          cost/efficiency key used for the background colormap.
-        history_file:     path to the history pickle (default: search_history.pckl).
-        save_path:        output PNG path (default: search_history.png in cwd).
-        show:             call plt.show() after saving.
+        z_param:      cost/efficiency key to plot on the y-axis.
+        history_file: path to the history pickle (default: search_history.pckl).
+        save_path:    output PNG path (default: search_history.png in cwd).
+        show:         call plt.show() after saving.
 
     Returns:
         (fig, ax) on success, or None if matplotlib is unavailable.
@@ -354,68 +338,40 @@ def visualize_search_history(x_param, y_param, z_param,
         return None
 
     import matplotlib.pyplot as plt
-    from matplotlib.colors import Normalize
-    from matplotlib.cm import ScalarMappable
-    from matplotlib.patches import Patch
 
     history = _load_pckl(history_file or "search_history.pckl")
     if not history:
         print("No search history found at", history_file)
         return None
 
-    fig, ax = plt.subplots(figsize=(10, 7))
-
-    # ── Background: all evaluated points coloured by cost ────────────────────
-    bg_xs, bg_ys, bg_zs = [], [], []
-    for entry in history:
-        for pt in entry['points']:
-            if x_param in pt and y_param in pt and z_param in pt:
-                bg_xs.append(pt[x_param])
-                bg_ys.append(pt[y_param])
-                bg_zs.append(pt[z_param])
-    if bg_xs:
-        sc = ax.scatter(bg_xs, bg_ys, c=bg_zs, cmap='viridis',
-                        alpha=0.6, s=180, marker='s', zorder=1)  # type: ignore[arg-type]
-        plt.colorbar(sc, ax=ax, label=z_param)
-
-    # ── Per-round colours for trajectory dots (early=blue, late=red) ─────────
-    n_rounds = len(history)
-    sm = ScalarMappable(cmap='plasma', norm=Normalize(0.1, 0.9))
-    round_colors = [sm.to_rgba(v) for v in np.linspace(0.1, 0.9, n_rounds)]
-
-    # ── Collect per-fly position trails, indexed by order in the points list ─
     n_flies = max(len(entry['points']) for entry in history)
-    fly_trails = {i: {'xs': [], 'ys': []} for i in range(n_flies)}
-    for entry in history:
-        for fly_i, pt in enumerate(entry['points']):
-            if x_param in pt and y_param in pt:
-                fly_trails[fly_i]['xs'].append(pt[x_param])
-                fly_trails[fly_i]['ys'].append(pt[y_param])
 
-    # ── Draw trails, per-round dots, and final-step arrows ────────────────────
-    for trail in fly_trails.values():
-        xs, ys = trail['xs'], trail['ys']
-        if not xs:
-            continue
-        if len(xs) > 1:
-            ax.plot(xs, ys, 'k-', alpha=0.25, linewidth=0.8, zorder=2)
-            ax.annotate("", xy=(xs[-1], ys[-1]), xytext=(xs[-2], ys[-2]),
-                        arrowprops=dict(arrowstyle="->", color='red', lw=1.2), zorder=4)
-        for r_idx, (px, py) in enumerate(zip(xs, ys)):
-            ax.scatter(px, py, color=round_colors[r_idx], s=40,
-                       edgecolors='k', linewidths=0.4, zorder=3)
+    # Use tab10 for up to 10 flies, cycling beyond that.
+    cmap = plt.get_cmap('tab10')
+    colors = [cmap(i % 10) for i in range(n_flies)]
 
-    # ── Round legend ─────────────────────────────────────────────────────────
-    legend_handles = [
-        Patch(facecolor=round_colors[r_idx], edgecolor='k', linewidth=0.5,  # type: ignore[arg-type]
-              label=f'Round {entry["round"]}')
-        for r_idx, entry in enumerate(history)
-    ]
-    ax.legend(handles=legend_handles, title='Round', loc='best', framealpha=0.8)
+    fig, ax = plt.subplots(figsize=(10, 6))
 
-    ax.set_xlabel(x_param, fontsize=12)
-    ax.set_ylabel(y_param, fontsize=12)
-    ax.set_title(f'FOA Search Trajectories: {x_param} vs {y_param}', fontsize=13)
+    for fly_i in range(n_flies):
+        rounds, zvals = [], []
+        for entry in history:
+            if fly_i < len(entry['points']):
+                pt = entry['points'][fly_i]
+                if z_param in pt:
+                    rounds.append(entry['round'])
+                    zvals.append(pt[z_param])
+        if rounds:
+            ax.plot(rounds, zvals,
+                    marker='o', color=colors[fly_i],
+                    linewidth=1.5, markersize=5,
+                    label=f'Fly {fly_i + 1}')
+
+    ax.set_xlabel('Round', fontsize=12)
+    ax.set_ylabel(z_param, fontsize=12)
+    ax.set_title(f'FOA Progress: {z_param} per Round', fontsize=13)
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))  # type: ignore[attr-defined]
+    ax.legend(title='Fly', loc='best', framealpha=0.8,
+              ncol=max(1, n_flies // 10))
     plt.tight_layout()
 
     out = save_path or os.path.join(os.getcwd(), 'search_history.png')
@@ -431,9 +387,9 @@ def visualize_search_history(x_param, y_param, z_param,
 # Optimiser class
 # ─────────────────────────────────────────────────────────────────────────────
 
-class Optimise3:
+class OptimiseN:
     """
-    One round of a multi-round Fruit Fly Optimisation.
+    One round of a multi-round N-dimensional Fruit Fly Optimisation.
 
     Each call to ``go()`` reads the previous round's crawled positions from a
     pickle file, matches them against the new simulation results, moves each fly
@@ -442,18 +398,17 @@ class Optimise3:
     The history pickle (``{name}_history.pckl``) stores a list of dicts, one
     per completed round::
 
-        {'round': int, 'points': [...scored dicts...], 'next_inputs': [...x/y dicts...]}
+        {'round': int, 'points': [...scored dicts...], 'next_inputs': [...param dicts...]}
 
     Settings keys (all passed via *optimiser_settings* dict)
     ---------------------------------------------------------
     Required:
         cost               Key name of the efficiency/cost field in results.
-        input_parameters   List of two parameter names to optimise over.
+        input_parameters   List of N parameter names to optimise over.
 
     Optional:
         name               Base name for output files (default: ``'optimisation'``).
         optimisation_speed Base step size in normalised [0, 1] space (default 0.25).
-        input_dimensions   Must be 2 (default 2).
         valid_cost_range   [min, max] – results outside this range have their cost
                            zeroed rather than being discarded (default [0, 1]).
         param_bounds       Dict mapping param → [min, max] in physical units.
@@ -470,7 +425,6 @@ class Optimise3:
 
         self.cost             = optimiser_settings['cost']
         self.input_parameters = optimiser_settings['input_parameters']
-        self.input_dimensions = optimiser_settings.get('input_dimensions', 2)
         self.valid_cost_range = optimiser_settings.get('valid_cost_range', [0, 1])
         self.param_bounds     = optimiser_settings.get('param_bounds', None)
         self.crawl_speed      = optimiser_settings.get('optimisation_speed', 0.25)
@@ -541,20 +495,17 @@ class Optimise3:
         self.new_inputs = crawl_optimise(
             self.points_to_crawl, self.all_points,
             self.crawl_speed, self.input_parameters,
-            self.input_dimensions, self.cost,
+            self.cost,
             self.param_bounds, self.noise_scale, self.repulsion_scale,
         )
         self._append_history(self.points_to_crawl, self.new_inputs)
         self.next_run['input_points'] = self.new_inputs  # type: ignore[assignment]
-        if self.input_dimensions == 2:
-            visualize_search_history(
-                x_param=self.input_parameters[0],
-                y_param=self.input_parameters[1],
-                z_param=self.cost,
-                history_file=self.history_file,
-                save_path=self.progress_plot,
-                show=False,
-            )
+        visualize_search_history(
+            z_param=self.cost,
+            history_file=self.history_file,
+            save_path=self.progress_plot,
+            show=False,
+        )
 
     def cleanup(self):
         """Delete the history pickle after the final optimisation round."""

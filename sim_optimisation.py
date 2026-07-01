@@ -63,6 +63,7 @@ class sim_Optimiser:
             Op = self.Optimiser(self.round_results, self.current_round, self.optimiser_settings)
             Op.go()
             self.inner_run_settings.update(Op.next_run)
+            self.last_optimiser = Op
         except Exception as error:
             print("An error occured in optimisation round: ", self.current_round)
             print("Inputs: ", self.round_results)
@@ -95,11 +96,13 @@ class sim_Optimiser:
     def do_Optimisation(self):
         for _ in range(self.rounds):
             self.do_Round()
-        
+
         self.optimiser_results = self.round_results
         self.get_optimal_point()
         self.save_optimal_point()
         self.save_optimisation_results()
+        if hasattr(self, 'last_optimiser'):
+            self.last_optimiser.cleanup()
 
 
 class sim_Optimisation_Sweeper:
@@ -134,9 +137,12 @@ class sim_Optimisation_Sweeper:
     def do_Optimisation_Sweep(self):
         if isinstance(self.outer_sweep_values, int) or isinstance(self.outer_sweep_values, float):
             self.outer_sweep_values = [self.outer_sweep_values]
+        base_name = self.optimiser_settings.get('name', 'optimisation')
         for i in self.outer_sweep_values:
             try:
                 self.inner_run_settings['fixed_parameters'].update({self.outer_sweep_parameter:i})
+                val_str = str(int(i)) if isinstance(i, float) and i == int(i) else str(i).replace('.', 'p')
+                self.optimiser_settings['name'] = f"{base_name}_{self.outer_sweep_parameter}_{val_str}"
                 self.SimOpt = sim_Optimiser(self.inner_run_settings, self.analysis_settings, self.optimiser_settings, self.sim_directory)
             except Exception as error:
                 print("Error initialising sim_Optimiser")
