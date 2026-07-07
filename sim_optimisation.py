@@ -1,8 +1,10 @@
 
+import copy
 from os import getcwd
 from run_sim_utils import multi_Sim_Runner
 from analysis_sim_utils import multi_Sim_Analyser
 from sim_optimise3 import Optimise3
+from sim_optimiseN import OptimiseN
 from general_sim_utils import print_res_to_CSV, compile_Sims, remove_unwanted_Files
 
 
@@ -15,11 +17,13 @@ class sim_Optimiser:
         self.sim_directory = sim_dir
 
         self.optimiser_version = self.optimiser_settings['optimiser_version']
-        if self.optimiser_version not in [2,3]:
-            print("currently optimiser versions are 2 and 3")
+        if self.optimiser_version not in [2,3,4]:
+            print("currently optimiser versions are 2, 3 and 4")
             raise ValueError
         elif self.optimiser_version == 3:
             self.Optimiser = Optimise3
+        elif self.optimiser_version == 4:
+            self.Optimiser = OptimiseN
         
         self.rounds = self.optimiser_settings['optimisation_rounds']
         if self.rounds not in range(1,11):
@@ -139,15 +143,16 @@ class sim_Optimisation_Sweeper:
             self.outer_sweep_values = [self.outer_sweep_values]
         base_name = self.optimiser_settings.get('name', 'optimisation')
         for i in self.outer_sweep_values:
+            run_settings = copy.deepcopy(self.inner_run_settings)
             try:
-                self.inner_run_settings['fixed_parameters'].update({self.outer_sweep_parameter:i})
+                run_settings['fixed_parameters'].update({self.outer_sweep_parameter:i})
                 val_str = str(int(i)) if isinstance(i, float) and i == int(i) else str(i).replace('.', 'p')
                 self.optimiser_settings['name'] = f"{base_name}_{self.outer_sweep_parameter}_{val_str}"
-                self.SimOpt = sim_Optimiser(self.inner_run_settings, self.analysis_settings, self.optimiser_settings, self.sim_directory)
+                self.SimOpt = sim_Optimiser(run_settings, self.analysis_settings, self.optimiser_settings, self.sim_directory)
             except Exception as error:
                 print("Error initialising sim_Optimiser")
                 print("Outer sweep val:", i)
-                print(self.inner_run_settings, self.analysis_settings, self.optimiser_settings, self.sim_directory)
+                print(run_settings, self.analysis_settings, self.optimiser_settings, self.sim_directory)
                 print(error)
             else: 
                 try:

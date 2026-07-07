@@ -185,6 +185,13 @@ def _clamp_to_bounds(val, param, bounds):
     return max(0.01, val)
 
 
+def _round_sig(val, sig=3):
+    """Round *val* to *sig* significant digits (0 is returned unchanged)."""
+    if val == 0:
+        return 0.0
+    return round(val, -int(math.floor(math.log10(abs(val)))) + (sig - 1))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Core crawl step (N-dimensional)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -281,7 +288,7 @@ def crawl_optimise(current_points, all_points, crawl_speed, input_params,
                 * _mod_flipped_sigmoid(ref_z, 4 / crawl_speed))
 
         crawled = _do_crawl_nd(ref_n, step, net_dir, params, noise_scale)
-        new_pt = {p: _clamp_to_bounds(crawled[p] * scales[p] + origins[p], p, bounds)
+        new_pt = {p: _round_sig(_clamp_to_bounds(crawled[p] * scales[p] + origins[p], p, bounds))
                   for p in params}
         new_pts.append(new_pt)
 

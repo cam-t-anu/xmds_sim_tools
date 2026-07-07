@@ -7,6 +7,23 @@ from itertools import product
 from time import sleep
 
 
+def check_param_conflicts(fixed_params, varying_keys):
+    """
+    Raise ValueError if any parameter name appears in both *fixed_params* and
+    *varying_keys*. When a key is defined in both, the fixed value silently
+    overwrites the varying value for every simulation (see add_param_sweep/
+    add_points below), which shows up as a missing --arg and duplicate runs.
+    """
+    conflicts = sorted(set(fixed_params) & set(varying_keys))
+    if conflicts:
+        raise ValueError(
+            f"Parameter(s) {conflicts} are set in both 'fixed_parameters' and the "
+            "varying parameters for this run. The fixed value will silently "
+            "override the varying value on every simulation, producing missing "
+            "arguments and duplicate runs. Remove the key from one of the two."
+        )
+
+
 def run_Sim(simargs):
     cmd = []
     loglvl = None
@@ -94,7 +111,8 @@ class sim_Pool:
 class multi_Sim_Runner(sim_Pool):
     def __init__(self, inner_run_settings) -> None:
         super().__init__()
-        
+        self.is_init = False
+
         try:
             self.inner_run_settings = inner_run_settings
             self.fixed_parameters = self.inner_run_settings['fixed_parameters']
@@ -122,6 +140,7 @@ class multi_Sim_Runner(sim_Pool):
     
     def add_param_sweep(self, fixed_params, params_to_sweep):
         try:
+            check_param_conflicts(fixed_params, params_to_sweep.keys())
             keys, values = zip(*params_to_sweep.items())
             args_array = [dict(zip(keys, v)) for v in product(*values)]
             for d in args_array:
@@ -134,6 +153,8 @@ class multi_Sim_Runner(sim_Pool):
 
     def add_points(self, fixed_params, points):
         try:
+            if points:
+                check_param_conflicts(fixed_params, points[0].keys())
             for point in points:
                 point.update(fixed_params)
             super().init_args(points)
