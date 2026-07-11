@@ -1,11 +1,19 @@
 
 import copy
-from os import getcwd
+import csv
+from math import floor, log10
+from os import getcwd, path
 from run_sim_utils import multi_Sim_Runner
 from analysis_sim_utils import multi_Sim_Analyser
 from sim_optimise3 import Optimise3
 from sim_optimiseN import OptimiseN
 from general_sim_utils import print_res_to_CSV, compile_Sims, remove_unwanted_Files
+
+
+def round_to_sig_figs(value, sig_figs=5):
+    if value == 0:
+        return 0.0
+    return round(value, -int(floor(log10(abs(value)))) + (sig_figs - 1))
 
 
 class sim_Optimiser:
@@ -170,6 +178,52 @@ class sim_Optimisation_Sweeper:
                     print(error)
 
             remove_unwanted_Files(dir=self.sim_directory, file_extensions=['xsil', 'h5', 'pckl'])
+
+    def read_optimal_points(self, optimal_points_filename='optimal_points.csv', sig_figs=5):
+        csv_path = path.join(self.sim_directory, optimal_points_filename)
+        if not path.isfile(csv_path):
+            print("No optimal points file found at", csv_path)
+            return []
+
+        param_keys = self.analysis_settings['flags']
+        points = []
+        with open(csv_path, 'r') as f:
+            for row in csv.DictReader(f):
+                point = {}
+                for key in param_keys:
+                    value = row.get(key)
+                    if value not in (None, ''):
+                        try:
+                            point[key] = round_to_sig_figs(float(value), sig_figs)
+                        except ValueError:
+                            point[key] = value
+                points.append(point)
+        return points
+
+    def run_optimal_points(self, optimal_points_filename='optimal_points.csv', sig_figs=5):
+        """
+        Re-runs every optimal point recorded in optimal_points.csv.
+
+        Each outer sweep step's optimal h5 result is wiped by
+        remove_unwanted_Files before the next step starts, so this reads the
+        saved parameters back out of the CSV and reruns them all in one
+        batch, leaving the resulting h5 files in place for analysis.
+
+        Parameters are rounded to sig_figs significant figures, since xmds
+        encodes them verbatim in the output filename.
+        """
+        points = self.read_optimal_points(optimal_points_filename, sig_figs)
+        if not points:
+            print("No optimal points to run from", optimal_points_filename)
+            return
+
+        run_settings = copy.deepcopy(self.inner_run_settings)
+        run_settings['fixed_parameters'] = {}
+        run_settings['input_points'] = points
+        run_settings['next_run_type'] = 'points'
+
+        self.optimal_points_runner = multi_Sim_Runner(run_settings)
+        self.optimal_points_runner.do_Run()
 
 
 

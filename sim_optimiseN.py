@@ -185,7 +185,7 @@ def _clamp_to_bounds(val, param, bounds):
     return max(0.01, val)
 
 
-def _round_sig(val, sig=3):
+def _round_sig(val, sig=5):
     """Round *val* to *sig* significant digits (0 is returned unchanged)."""
     if val == 0:
         return 0.0

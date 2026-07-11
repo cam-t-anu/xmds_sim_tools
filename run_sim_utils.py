@@ -5,6 +5,14 @@ from os import getcwd
 from multiprocessing import Pool
 from itertools import product
 from time import sleep
+from math import floor, log10
+
+
+def round_to_sig_figs(value, sig_figs=5):
+    """Round *value* to *sig_figs* significant digits (0 is returned unchanged)."""
+    if value == 0:
+        return 0.0
+    return round(value, -int(floor(log10(abs(value)))) + (sig_figs - 1))
 
 
 def check_param_conflicts(fixed_params, varying_keys):
@@ -36,7 +44,10 @@ def run_Sim(simargs):
         elif arg=="log":
             loglvl = simargs[arg]
         elif simargs[arg] != 'default':
-            cmd.append("--"+arg+"="+str(simargs[arg]))
+            value = simargs[arg]
+            if isinstance(value, float):
+                value = round_to_sig_figs(value)
+            cmd.append("--"+arg+"="+str(value))
 
     if(loglvl=="all" or loglvl=="timeouts_only"):
         logfile = ''
