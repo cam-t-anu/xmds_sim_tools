@@ -17,74 +17,72 @@ def do_sim_Run():
     in_pulse_end_time = 0.35*tmax
     out_pulse_start_time = 0.52*tmax
 
-    sim_directory = setup_run_subdir('1DGEM-EIT.xmds')
+    sim_directory = setup_run_subdir('1DGEM3L_order.xmds')
 
     outer_sweep_settings = {
-        'parameter':        'a1',
-        'values':           10,
+        'parameter':        'De',
+        'values':           [7],
         'outer_routine':    outer_routine, 
-        'sim_xmds_filename': '1DGEM-EIT.xmds'
+        'sim_xmds_filename': '1DGEM3L_order.xmds'
     }
 
     inner_run_settings = {
         'fixed_parameters':     {
-            'Omg':  'default',
-            'ds':   'default',
             'lds':  'default', 
             'ldw':  'default',
-            'dr':   'default',
-            'bias': 'default',
             'gr':   'default',
             'c0':   'default',
             'Pw':   'default',
             'Tin':  'default',
             'tgap': 'default',
             'Np': 'default',
-            'a0': 'default',
-            'am1': 'default',
             'pdiff': 'default',
             'pmdiff': 'default',
+            'gft': 'default',
+            'ds': 'default'
         },
         'input_parameters':     {
-            'gft':   list(np.linspace(start=0.35, stop=0.42, num=3)), 
-            'Ome':   list(np.linspace(start=2.1, stop=2.5, num=3))
+            'Omg':   list(np.linspace(start=0.5, stop=5, num=4)),
+            'bias':  list(np.linspace(start=0.2, stop=1.6, num=4))
         },
         'input_points': [],
         'sim_cmd_settings':     {
             "log":              "timeouts_only",
             "timeout":          20*60,
-            "sim_name":         '1DGEM-EIT.out',
+            "sim_name":         '1DGEM3L_order.out',
         },
-        'sim_procs_num':    15,
+        'sim_procs_num':    16,
         'next_run_type':    'sweep'
     }
 
     analysis_settings = {
-        'flags':                ['De', 'Np', 'Ome', 'Omg', 'ds', 'dr', 'Pw', 'Tin', 'c0', 'tgap', 'a1', 'pdiff', 'pmdiff', 'gft', 'bias'],
+        'flags':                ['De', 'Np', 'Omg', 'ds', 'Pw', 'Tin', 'c0', 'tgap', 'a1', 'pdiff', 'pmdiff', 'gft', 'bias'],
         'in_pulse_end_time':    in_pulse_end_time,
         'out_pulse_start_time': out_pulse_start_time,
-        'results_file_nametag': '1Dgem-eit',
+        'results_file_nametag': '1Dgem-order',
         'num_analysis_procs':   5,
         'sim_directory':        sim_directory
     }
 
     optimiser_settings = {
         'name':                 '1dgemeit_optimisation',
-        'optimisation_speed':   0.5, #0-1
-        'noise_scale':          0.08,   # more aggressive exploration
+        'optimisation_speed':   0.4, #0-1
+        'noise_scale':          0.05,   # more aggressive exploration
         'optimiser_version':    4,
-        'optimisation_rounds':  5,
+        'seed':                 37,
+        'optimisation_rounds':  10,
         'cost':                 'Efficiency',
         'valid_cost_range':     [0,1],
-        'input_parameters':     ['gft','Ome'],
+        'input_parameters':     ['Omg', 'bias'],
         'param_bounds':          {
-            'gft': [0.35, 0.42],
-            'Ome': [2.1, 2.5]
+            'Omg': [0.1, 6],
+            'bias': [0.1, 2]
         }
     }
 
     S = sim_Optimisation_Sweeper(outer_sweep_settings, inner_run_settings, analysis_settings, optimiser_settings, sim_directory)
     S.do_Optimisation_Sweep()
+    S.run_optimal_points()
 
 
 

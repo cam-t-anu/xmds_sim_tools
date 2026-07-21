@@ -1,9 +1,9 @@
 #!/usr/bin/python3
 
 import time
-from os import getcwd
 import numpy as np
 from sim_optimisation import sim_Optimisation_Sweeper
+from general_sim_utils import setup_run_subdir
 
 
 def outer_routine(args):
@@ -17,7 +17,7 @@ def do_sim_Run():
     in_pulse_end_time = 0.35*tmax
     out_pulse_start_time = 0.65*tmax
 
-    sim_directory = getcwd()
+    sim_directory = setup_run_subdir('1DGEM3L_new.xmds')
 
     outer_sweep_settings = {
         'parameter':        'De',
@@ -65,13 +65,11 @@ def do_sim_Run():
     }
 
     optimiser_settings = {
-        'optimiser_version':    3,
+        'optimiser_version':    4,
         'optimisation_rounds':  2,
         'cost':                 'Efficiency',
-        'maximise_cost':        True,
         'valid_cost_range':     [0,1],
-        'input_parameters':     ['dm','Om'],
-        'input_dimensions':     2
+        'input_parameters':     ['dm','Om']
     }
 
     S = sim_Optimisation_Sweeper(outer_sweep_settings, inner_run_settings, analysis_settings, optimiser_settings, sim_directory)

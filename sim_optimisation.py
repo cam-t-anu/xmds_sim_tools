@@ -5,7 +5,6 @@ from math import floor, log10
 from os import getcwd, path
 from run_sim_utils import multi_Sim_Runner
 from analysis_sim_utils import multi_Sim_Analyser
-from sim_optimise3 import Optimise3
 from sim_optimiseN import OptimiseN
 from general_sim_utils import print_res_to_CSV, compile_Sims, remove_unwanted_Files
 
@@ -25,11 +24,9 @@ class sim_Optimiser:
         self.sim_directory = sim_dir
 
         self.optimiser_version = self.optimiser_settings['optimiser_version']
-        if self.optimiser_version not in [2,3,4]:
-            print("currently optimiser versions are 2, 3 and 4")
+        if self.optimiser_version not in [2,4]:
+            print("currently optimiser versions are 2 and 4")
             raise ValueError
-        elif self.optimiser_version == 3:
-            self.Optimiser = Optimise3
         elif self.optimiser_version == 4:
             self.Optimiser = OptimiseN
         

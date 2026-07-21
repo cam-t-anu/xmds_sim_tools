@@ -1,8 +1,30 @@
-from os import getcwd, path, listdir
+from os import getcwd, path, listdir, makedirs, chdir
 from subprocess import run
 import pickle
 import csv
 import h5py
+import shutil
+
+def setup_run_subdir(xmds_filename):
+    """
+    Create (or reuse) a subdirectory named after *xmds_filename*, copy the
+    .xmds source into it, and chdir into it. Returns the new directory's
+    absolute path.
+
+    xmds2 compiles into, and the compiled binary writes its .h5 results into,
+    whatever the process's current directory is at the time — as does every
+    other piece of this pipeline (log files, optimiser history/plots, result
+    CSVs all resolve paths relative to getcwd()). So doing this one chdir up
+    front, before compiling or running anything, is enough to keep an entire
+    optimisation run's output isolated in its own folder instead of scattered
+    alongside the script and its .xmds source.
+    """
+    src_dir = getcwd()
+    run_dir = path.join(src_dir, path.splitext(xmds_filename)[0] + '_run')
+    makedirs(run_dir, exist_ok=True)
+    shutil.copy(path.join(src_dir, xmds_filename), run_dir)
+    chdir(run_dir)
+    return run_dir
 
 def compile_Sims(dir=getcwd(), sim_file_name=None):
     if sim_file_name == None:
