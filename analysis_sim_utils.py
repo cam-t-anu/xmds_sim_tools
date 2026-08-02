@@ -1,9 +1,10 @@
 #!/usr/bin/python3
-from os import getcwd
+import argparse
+from os import getcwd, path
 from pprint import pprint
 
 import numpy as np
-from general_sim_utils import import_h5_data, find_h5_files, parse_params_from_h5_filename
+from general_sim_utils import import_h5_data, find_h5_files, parse_params_from_h5_filename, print_res_to_CSV
 from multiprocessing import Pool
 
 #Results returned is a list of dictionaries, one for each h5 file. Dictionary contains filename, efficiency, and input parameter values for each flag
@@ -55,7 +56,8 @@ class multi_Sim_Analyser:
 
     def init_args(self):
         for n in self.h5filenames:
-            self.args_list.append([n, self.in_pulse_end_time, self.out_pulse_start_time])
+            filepath = path.join(self.sim_directory, n)
+            self.args_list.append([filepath, self.in_pulse_end_time, self.out_pulse_start_time])
         
     def parse_results_into_list_of_dicts(self):
         try:
@@ -222,8 +224,16 @@ def calc_efficiency(args):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('sim_directory', nargs='?', default=getcwd(),
+                         help="Directory containing the sim files to analyse (default: cwd). "
+                              "The CSV, if requested, is also written here.")
+    parser.add_argument('--csv', nargs='?', const='analysis_results.csv', default=None,
+                         help="Write results to a CSV file (same format as optimal_points.csv). "
+                              "Optionally give a filename (default: %(const)s)")
+    args = parser.parse_args()
 
-    sim_directory = getcwd()
+    sim_directory = args.sim_directory
 
     analysis_settings = {
         'flags':                ['De', 'Np', 'Omg', 'adyn', 'bias', 'a1', 'cba', 'cbo', 'cbsd', 'ds', 'gcb', 'temp'],
@@ -234,8 +244,13 @@ def main():
 
     M = multi_Sim_Analyser(analysis_settings)
     M.get_all_sim_files_in_dir()
-    M.run_multi_Sim_Analysis()    
-    pprint(sorted(M.results, key=lambda x: x['Efficiency'], reverse=True))
-    
+    M.run_multi_Sim_Analysis()
+    results = sorted(M.results, key=lambda x: x['Efficiency'], reverse=True)
+
+    if args.csv:
+        print_res_to_CSV(args.csv, results, sim_directory)
+    else:
+        pprint(results)
+
 if __name__ == "__main__":
     main()

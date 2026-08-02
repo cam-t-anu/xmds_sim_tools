@@ -92,13 +92,11 @@ def print_res_to_CSV(filename, res, dir=getcwd()):
                 with open(dir+'/'+filename, flag) as f:
                     try:
                         csv_writer = csv.DictWriter(f, keys)
-                        
+                        csv_writer.writerows(res)
                     except Exception as error:
-                        print(res, keys)
                         print("Couldn't append results to file:", filename)
                         print(error)
                         return
-                    csv_writer.writerows(res)
             except:
                 print("Couldn't write to existing file:", filename)
                 return
@@ -136,13 +134,7 @@ def find_h5_files(directory, sim_nametag):
         return []
 
 def import_h5_data(filename):
-    try: 
-        f = h5py.File(filename)
-        return f
-    except Exception as error:
-        print("Couldn't open:", filename)
-        print(error)
-    return False
+    return h5py.File(filename)
 
 def parse_params_from_h5_filename(filename, flags):
     parsed = dict()
