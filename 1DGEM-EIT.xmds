@@ -247,6 +247,22 @@
                 }
             }
 
+            //all the non-vector time dependent globals at time t. Called once per integration stage by the
+            //functions operator, and again at each sample time so the sampled moments match the sample time
+            void update_time_globals(double t){
+                //All the non-vector time dependant stuff here 
+                g_flip = smoothed_gradient_flip(t, gradient_flip_time*tmax, 10*t_char); //this flips the gradient
+                g_switch = smoothed_gradient_switch_off(t, retrieve_start_time*tmax, 10*t_char); //this turns the gradient from on to off
+                Omega_t = Omega_GEM*control_gem_store(t, store_end_time*tmax, 10*t_char) + Omega_EIT*control_eit_retrieve(t, retrieve_start_time*tmax, 10*t_char);
+                Omega_t_0 = Omega_t*factor_Omega_0;
+                Omega_t_m1 = Omega_t*factor_Omega_m1;
+                Delta_t = Delta*control_gem_store(t, store_end_time*tmax, 10*t_char); //Single photon detuning is 0 for eit retrieval 
+                AC_Stark_Shift = Delta_t*Omega_t*Omega_t/(Gamma*Gamma+Delta_t*Delta_t);
+                AC_Stark_Shift_0 = Delta_t*Omega_t_0*Omega_t_0/(Gamma*Gamma+Delta_t*Delta_t);
+                AC_Stark_Shift_m1 = Delta_t*Omega_t_m1*Omega_t_m1/(Gamma*Gamma+Delta_t*Delta_t);
+            }
+
+
             ]]>
 
         </globals>
@@ -401,16 +417,7 @@
 
                 <operator kind="functions">
                     <![CDATA[
-                        //All the non-vector time dependant stuff here 
-                        g_flip = smoothed_gradient_flip(t, gradient_flip_time*tmax, 10*t_char); //this flips the gradient
-                        g_switch = smoothed_gradient_switch_off(t, retrieve_start_time*tmax, 10*t_char); //this turns the gradient from on to off
-                        Omega_t = Omega_GEM*control_gem_store(t, store_end_time*tmax, 10*t_char) + Omega_EIT*control_eit_retrieve(t, retrieve_start_time*tmax, 10*t_char);
-                        Omega_t_0 = Omega_t*factor_Omega_0;
-                        Omega_t_m1 = Omega_t*factor_Omega_m1;
-                        Delta_t = Delta*control_gem_store(t, store_end_time*tmax, 10*t_char); //Single photon detuning is 0 for eit retrieval 
-                        AC_Stark_Shift = Delta_t*Omega_t*Omega_t/(Gamma*Gamma+Delta_t*Delta_t);
-                        AC_Stark_Shift_0 = Delta_t*Omega_t_0*Omega_t_0/(Gamma*Gamma+Delta_t*Delta_t);
-                        AC_Stark_Shift_m1 = Delta_t*Omega_t_m1*Omega_t_m1/(Gamma*Gamma+Delta_t*Delta_t);
+                        update_time_globals(t); //sets g_flip, Omega_t, etc. at the current t (see globals)
                     ]]>
                 </operator>
 
@@ -465,6 +472,7 @@
                 <moments>ER EI  grad  ctrl  phi_geR phi_geI  phi_gsR phi_gsI phi_ge0R phi_ge0I phi_gs0R phi_gs0I phi_gem1R phi_gem1I phi_gsm1R phi_gsm1I detuning Ni_atoms</moments>
                 <dependencies>state probe gradient_field interacting_atoms</dependencies>
                 <![CDATA[
+                    update_time_globals(t); //re-evaluate the time-dependent globals (Omega_t, Delta_t, g_flip, ...) at the sample time
                     //ER EI  phi_esR phi_esI  phi_geR phi_geI  phi_gsR phi_gsI  Ni_atoms  grad
                     _SAMPLE_COMPLEX(E);
                     //_SAMPLE_COMPLEX(phi_gg);
@@ -478,7 +486,7 @@
                     _SAMPLE_COMPLEX(phi_gem1);
                     _SAMPLE_COMPLEX(phi_gsm1);
                     Ni_atoms=Ni;
-                    grad = delta;
+                    grad = g_switch*( (1-g_flip)*delta_store + g_flip*delta_recall ); //delta at the sample time
                     ctrl = Omega_t;
                     detuning = Delta_t;
                 ]]>

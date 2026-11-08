@@ -180,6 +180,16 @@
                 }
             }
 
+            //all the non-vector time dependent globals at time t. Called once per integration stage by the
+            //functions operator, and again at each sample time so the sampled moments match the sample time
+            void update_time_globals(double t){
+                //All the non-vector time dependant stuff here 
+                g_switch = smoothed_gradient_switch(t, 0.5*tmax, tmax, t_char);
+                Omega_t = Omega*smoothed_control_switch(t, 0.35*tmax, 0.65*tmax, tmax, t_char);
+                AC_Stark_Shift = Delta*Omega*Omega_t/(Gamma*Gamma+Delta*Delta);
+            }
+
+
             ]]>
 
         </globals>
@@ -274,8 +284,10 @@
         <initialisation>
             <dependencies> atom_density_dist </dependencies>
             <![CDATA[ 
-                d_norm += Dist;
-                count += 1;
+                //xmds sums over x itself (weighted by dx, which cancels in d_norm/count),
+                //so assign the per-point value here rather than accumulating with +=
+                d_norm = Dist;
+                count = 1;
             ]]>
         </initialisation>
     </vector>
@@ -310,10 +322,7 @@
 
                 <operator kind="functions">
                     <![CDATA[
-                        //All the non-vector time dependant stuff here 
-                        g_switch = smoothed_gradient_switch(t, 0.5*tmax, tmax, t_char);
-                        Omega_t = Omega*smoothed_control_switch(t, 0.35*tmax, 0.65*tmax, tmax, t_char);
-                        AC_Stark_Shift = Delta*Omega*Omega_t/(Gamma*Gamma+Delta*Delta);
+                        update_time_globals(t); //sets g_flip, Omega_t, etc. at the current t (see globals)
                     ]]>
                 </operator>
 
@@ -359,6 +368,7 @@
                 <moments>ER EI  grad  ctrl  phi_geR phi_geI  phi_gsR phi_gsI</moments>
                 <dependencies>state probe gradient_field</dependencies>
                 <![CDATA[
+                    update_time_globals(t); //re-evaluate the time-dependent globals (Omega_t, Delta_t, g_flip, ...) at the sample time
                     //ER EI  phi_esR phi_esI  phi_geR phi_geI  phi_gsR phi_gsI  Ni_atoms  grad
                     _SAMPLE_COMPLEX(E);
                     //_SAMPLE_COMPLEX(phi_gg);
@@ -368,7 +378,7 @@
                     _SAMPLE_COMPLEX(phi_ge);
                     _SAMPLE_COMPLEX(phi_gs);
                     //Ni_atoms=Ni;
-                    grad = delta;
+                    grad = (1-g_switch)*delta_store+g_switch*delta_recall; //delta at the sample time
                     ctrl = Omega_t;
                 ]]>
             </sampling>
