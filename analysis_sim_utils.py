@@ -99,7 +99,7 @@ def find_nearest_idx(array, value):
     return idx
 
 def detect_sim_dims(f):
-    """Returns number of spatial dimensions: 1 for (t,x), 3 for (t,x,y,z)."""
+    """Returns number of spatial dimensions: 1 for (t,x), 2 for (t,x,y), 3 for (t,x,y,z)."""
     return len(f['1/ER'].shape) - 1
 
 # --- 1D integration ---
@@ -115,31 +115,30 @@ def integrate_out_pulse_1D_sim(EMag, t, out_pulse_start_time):
     x_index = len(EMag[1,:])-1
     return np.sum(pow(EMag[t_idx_start:, x_index], 2))
 
-# --- 3D integration (EMag shape: t, x, y, z) ---
+# --- 2D/3D integration (EMag shape: t, x, y) or (t, x, y, z) ---
+# sums over every transverse dimension at the face, so works for either
 
-def integrate_in_pulse_3D_sim(EMag, t, in_pulse_end_time):
+def integrate_in_pulse_ND_sim(EMag, t, in_pulse_end_time):
     t_idx_end = find_nearest_idx(t, in_pulse_end_time)
-    return np.sum(EMag[:t_idx_end, 0, :, :]**2)
+    return np.sum(EMag[:t_idx_end, 0]**2)
 
 
-def integrate_out_pulse_3D_sim(EMag, t, out_pulse_start_time):
+def integrate_out_pulse_ND_sim(EMag, t, out_pulse_start_time):
     t_idx_start = find_nearest_idx(t, out_pulse_start_time)
-    return np.sum(EMag[t_idx_start:, -1, :, :]**2)
+    return np.sum(EMag[t_idx_start:, -1]**2)
 
 # --- Auto-detection of pulse timing ---
 
 def _input_power_timeseries(EMag):
     """Integrated |E|^2 at x=0 face as a function of time, for any dimensionality."""
-    if EMag.ndim == 2:
-        return EMag[:, 0]**2
-    return np.sum(EMag[:, 0, :, :]**2, axis=(1, 2))
+    face = EMag[:, 0]**2
+    return face if face.ndim == 1 else face.reshape(len(face), -1).sum(axis=1)
 
 
 def _output_power_timeseries(EMag):
     """Integrated |E|^2 at x=-1 face as a function of time, for any dimensionality."""
-    if EMag.ndim == 2:
-        return EMag[:, -1]**2
-    return np.sum(EMag[:, -1, :, :]**2, axis=(1, 2))
+    face = EMag[:, -1]**2
+    return face if face.ndim == 1 else face.reshape(len(face), -1).sum(axis=1)
 
 
 def auto_detect_pulse_times(EMag, t, threshold=0.01):
@@ -209,8 +208,8 @@ def calc_efficiency(args):
             in_power  = integrate_in_pulse_1D_sim(Emag, t, in_pulse_end_time)
             out_power = integrate_out_pulse_1D_sim(Emag, t, out_pulse_start_time)
         else:
-            in_power  = integrate_in_pulse_3D_sim(Emag, t, in_pulse_end_time)
-            out_power = integrate_out_pulse_3D_sim(Emag, t, out_pulse_start_time)
+            in_power  = integrate_in_pulse_ND_sim(Emag, t, in_pulse_end_time)
+            out_power = integrate_out_pulse_ND_sim(Emag, t, out_pulse_start_time)
 
         efficiency = out_power / in_power if in_power > 0 else 0
         return {"Filename": filename, "Efficiency": efficiency,

@@ -134,7 +134,13 @@ def find_h5_files(directory, sim_nametag):
         return []
 
 def import_h5_data(filename):
-    return h5py.File(filename)
+    try:
+        f = h5py.File(filename)
+        return f
+    except Exception as error:
+        print("Couldn't open:", filename)
+        print(error)
+    return False
 
 def parse_params_from_h5_filename(filename, flags):
     parsed = dict()
