@@ -51,6 +51,7 @@
             //frequencies
             double Delta; //Single photon detuning (rad/s)
             double delta_max; // 3.8333e8; //2*pi * 28.7e6; //Max two photon detuning per unit length
+            double bias_field;
 
             double gradient_flip; //flips the order of the gradient, 0 == standard, or 1 == flipped
             bool gradient_has_flipped = 0;
@@ -70,8 +71,8 @@
             double pulsewidth = 1.5*t_char; //(s) //actual width of Hermite function pulse is about 8*pulsewidth
             double tin = 5*pulsewidth; //width of pulse /8 + buffer
             double num_pulses;
-            double t_gap;
-            double coeff_0;
+            double t_gap; //gap between pulses
+            double coeff_0; //contribution coefficients of pulse hermite modes
             double coeff_1;
             double coeff_2;
             double coeff_3;
@@ -88,6 +89,7 @@
 
             //global functions
 
+            //simple gaussian distribution function, x is input and w is standard deviation
             double gaussian( double x, double w ){ 
                 return exp( -0.5 * pow(x,2) / pow(w,2) ); 
             }
@@ -98,6 +100,7 @@
                 return 0.5*erf( (x- (centre-0.5*width) )*sharpness ) + 0.5*erf( (-x + (centre+0.5*width) )*sharpness );
             }
 
+            //simple function to calculate the factorial of a number i
             double factorial(int i){
                 int f = 1;
                 if (i <= 1) return 1;
@@ -108,11 +111,13 @@
                 return f;
             }
 
+            //sigmoid function used to prevent step changes in variables to prevent discontinuities causing convergence problems
             double activation_sigmoid(double x, double activation_width){
 
                 return 1/(1+exp(-40*x/activation_width)); //40 chosen for nice scaling
             }
 
+            //boolean function to turn on and off the control beam
             double smoothed_control_switch(double time, double t_store_end, double t_retrieve_start, double tmax, double t_act){
 
                 if      (time < t_store_end - t_act/2) { return 1.0; }
@@ -122,6 +127,7 @@
                 else                                 { return 1.0; }
             }
 
+            //boolean function to flip the gradient
             double smoothed_gradient_switch(double time, double t_switch, double tmax, double t_act){
 
                 if      (time < t_switch - t_act/2) { return 0; }
@@ -130,6 +136,7 @@
             }
 
 
+            //function for spatial atomic density, not time dependant
             double density_func(double x){ 
                 double l_density = 1;
                 
@@ -146,6 +153,7 @@
                 return l_density;
             }
 
+            //hermite
             double hermite_poly(int n, double x){
                 if (n == 0) {
                     return 1;
@@ -172,11 +180,11 @@
                 return hermite_pulse_profile(t-T_gap/2, 0.25*w)+hermite_pulse_profile(t+T_gap/2, 0.25*w);
             }            
 
-            double grad_fun(double x, bool inv){
+            double grad_fun(double x, double grad_max, bool inv){
                 if (inv == 0){
-                    return delta_max*( 0.5 + (x-x_mem_max)/(mem_len) );
+                    return grad_max*( 0.5 + (x-x_mem_max)/(mem_len) );
                 } else {
-                    return -delta_max*( 0.5 + (x-x_mem_max)/(mem_len) );
+                    return -grad_max*( 0.5 + (x-x_mem_max)/(mem_len) );
                 }
             }
 
@@ -198,6 +206,7 @@
             <argument name="lds" type="real" default_value="0"/>
             <argument name="ldw" type="real" default_value="1"/>
             <argument name="dm" type="real" default_value="0.1"/>
+            <argument name="bias" type="real" default_value="0"/>
             <argument name="gf" type="real" default_value="0"/>
             <argument name="c0" type="real" default_value="1"/>
             <argument name="c1" type="real" default_value="0"/>
@@ -240,6 +249,7 @@
                 //Detuning
                 Delta = 2*pi * De*f_char; //Single photon detuning (rad/s)
                 delta_max = 2*pi * dm*f_char/(mem_len); //Max two photon detuning per unit length
+                bias_field = 2*pi * bias * f_char;
 
             ]]>
         </arguments>
@@ -306,8 +316,8 @@
         <components> delta_store delta_recall delta</components>
         <initialisation>
             <![CDATA[
-                delta_store = grad_fun(x, gradient_flip);
-                delta_recall = grad_fun(x, !gradient_flip);
+                delta_store = bias_field + grad_fun(x, delta_max, gradient_flip);
+                delta_recall = bias_field + grad_fun(x, delta_max, !gradient_flip);
             ]]>
         </initialisation>
     </vector>
@@ -365,7 +375,7 @@
     <output filename="1DGEM3L_new" format="hdf5">
         <group>
             <sampling basis="x">
-                <moments>ER EI  grad  ctrl  phi_geR phi_geI  phi_gsR phi_gsI</moments>
+                <moments>ER EI  grad  ctrl detuning phi_geR phi_geI  phi_gsR phi_gsI</moments>
                 <dependencies>state probe gradient_field</dependencies>
                 <![CDATA[
                     update_time_globals(t); //re-evaluate the time-dependent globals (Omega_t, Delta_t, g_flip, ...) at the sample time
@@ -380,6 +390,7 @@
                     //Ni_atoms=Ni;
                     grad = (1-g_switch)*delta_store+g_switch*delta_recall; //delta at the sample time
                     ctrl = Omega_t;
+                    detuning = Delta;
                 ]]>
             </sampling>
         </group>
