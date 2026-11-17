@@ -99,23 +99,23 @@ def find_nearest_idx(array, value):
     return idx
 
 def detect_sim_dims(f):
-    """Returns number of spatial dimensions: 1 for (t,x), 2 for (t,x,y), 3 for (t,x,y,z)."""
+    """Returns number of spatial dimensions: 1 for (t,z), 2 for (t,z,x), 3 for (t,z,x,y). z (axis 1) is the propagation axis."""
     return len(f['1/ER'].shape) - 1
 
 # --- 1D integration ---
 
 def integrate_in_pulse_1D_sim(EMag, t, in_pulse_end_time):
     t_idx_end = find_nearest_idx(t, in_pulse_end_time)
-    x_index = 0
-    return np.sum(pow(EMag[:t_idx_end, x_index], 2))
+    z_index = 0
+    return np.sum(pow(EMag[:t_idx_end, z_index], 2))
 
 
 def integrate_out_pulse_1D_sim(EMag, t, out_pulse_start_time):
     t_idx_start = find_nearest_idx(t, out_pulse_start_time)
-    x_index = len(EMag[1,:])-1
-    return np.sum(pow(EMag[t_idx_start:, x_index], 2))
+    z_index = len(EMag[1,:])-1
+    return np.sum(pow(EMag[t_idx_start:, z_index], 2))
 
-# --- 2D/3D integration (EMag shape: t, x, y) or (t, x, y, z) ---
+# --- 2D/3D integration (EMag shape: t, z, x) or (t, z, x, y) ---
 # sums over every transverse dimension at the face, so works for either
 
 def integrate_in_pulse_ND_sim(EMag, t, in_pulse_end_time):
@@ -130,13 +130,13 @@ def integrate_out_pulse_ND_sim(EMag, t, out_pulse_start_time):
 # --- Auto-detection of pulse timing ---
 
 def _input_power_timeseries(EMag):
-    """Integrated |E|^2 at x=0 face as a function of time, for any dimensionality."""
+    """Integrated |E|^2 at z=0 face as a function of time, for any dimensionality."""
     face = EMag[:, 0]**2
     return face if face.ndim == 1 else face.reshape(len(face), -1).sum(axis=1)
 
 
 def _output_power_timeseries(EMag):
-    """Integrated |E|^2 at x=-1 face as a function of time, for any dimensionality."""
+    """Integrated |E|^2 at z=-1 face as a function of time, for any dimensionality."""
     face = EMag[:, -1]**2
     return face if face.ndim == 1 else face.reshape(len(face), -1).sum(axis=1)
 

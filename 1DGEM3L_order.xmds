@@ -37,9 +37,9 @@
             double c = 3e8; //Speed of light (m/s)
             double probe_wavelength = 795e-9; //(m)
             double k0 =  2*pi / probe_wavelength;
-            double x_mem_min = 0;
-            double x_mem_max = 0.03;
-            double mem_len = x_mem_max-x_mem_min;
+            double z_mem_min = 0;
+            double z_mem_max = 0.03;
+            double mem_len = z_mem_max-z_mem_min;
             double half_mem_len = mem_len/2;
             double mem_width = 0.0004;
             double mem_height = 0.0004;
@@ -191,12 +191,12 @@
                 else                                    { return 1; }
             }
 
-            double density_func(double x){ 
+            double density_func(double z){ 
                 double l_density = 1;
                 if (long_dens_sharpness != 0){
-                    l_density = smoothed_hat_fun(x, half_mem_len, long_dens_width_factor*mem_len, long_dens_sharpness); 
+                    l_density = smoothed_hat_fun(z, half_mem_len, long_dens_width_factor*mem_len, long_dens_sharpness); 
                 } else if (long_dens_width_factor != 1){
-                    if (x < (half_mem_len-0.5*long_dens_width_factor*mem_len) || x > (half_mem_len+0.5*long_dens_width_factor*mem_len) ){ 
+                    if (z < (half_mem_len-0.5*long_dens_width_factor*mem_len) || z > (half_mem_len+0.5*long_dens_width_factor*mem_len) ){ 
                         l_density = 0;
                     } else {
                         l_density = 1;
@@ -239,11 +239,11 @@
                 }
             }
 
-            double grad_fun(double x, double grad_max, bool inv){
+            double grad_fun(double z, double grad_max, bool inv){
                 if (inv == 0){
-                    return grad_max*( 0.5 + (x-x_mem_max)/(mem_len) );
+                    return grad_max*( 0.5 + (z-z_mem_max)/(mem_len) );
                 } else {
-                    return -grad_max*( 0.5 + (x-x_mem_max)/(mem_len) );
+                    return -grad_max*( 0.5 + (z-z_mem_max)/(mem_len) );
                 }
             }
 
@@ -335,11 +335,11 @@
     <geometry>
         <propagation_dimension> t </propagation_dimension>
         <transverse_dimensions>
-            <dimension name="x" lattice="256" domain="(0, 0.03)" />
+            <dimension name="z" lattice="256" domain="(0, 0.03)" />
         </transverse_dimensions>
     </geometry>
 
-    <vector name="state" type="complex" dimensions="x">
+    <vector name="state" type="complex" dimensions="z">
         <components> phi_gg phi_ss phi_ee phi_es phi_ge phi_gs</components>
         <initialisation>
             <![CDATA[
@@ -349,15 +349,15 @@
         </initialisation>
     </vector>
 
-    <vector name="probe" type="complex" dimensions="x">
+    <vector name="probe" type="complex" dimensions="z">
         <components> E </components>
     </vector>
    
-    <vector name="atom_density_dist" type="real" dimensions="x">
+    <vector name="atom_density_dist" type="real" dimensions="z">
         <components> Dist </components>
         <initialisation>
             <![CDATA[ 
-                Dist = density_func(x);
+                Dist = density_func(z);
             ]]>
         </initialisation>
     </vector>
@@ -367,14 +367,14 @@
         <initialisation>
             <dependencies> atom_density_dist </dependencies>
             <![CDATA[ 
-                //under the hood xmds will integrate these values with respect to dx, but I actually want a sum, thus dividing by dx
-                d_norm = Dist/dx;
-                count = 1/dx;
+                //under the hood xmds will integrate these values with respect to dz, but I actually want a sum, thus dividing by dz
+                d_norm = Dist/dz;
+                count = 1/dz;
             ]]>
         </initialisation>
     </vector>
 
-    <vector name="interacting_atoms" type="real" dimensions= "x">
+    <vector name="interacting_atoms" type="real" dimensions= "z">
         <components> Ni</components>
         <initialisation>
             <dependencies> atom_density_dist atom_density_dist_normalisation </dependencies>
@@ -385,13 +385,13 @@
         </initialisation>
     </vector>
 
-    <vector name="gradient_field" type="real" dimensions="x">
+    <vector name="gradient_field" type="real" dimensions="z">
         <components> delta_store delta_recall delta_off delta</components>
         <initialisation>
             <![CDATA[
-                //these are arrays in x, which will be combined by time based functions 
-                delta_store = bias_field + grad_fun(x, delta_store_max, gradient_reverse);
-                delta_recall = bias_field + grad_fun(x, delta_recall_max, !gradient_reverse);
+                //these are arrays in z, which will be combined by time based functions 
+                delta_store = bias_field + grad_fun(z, delta_store_max, gradient_reverse);
+                delta_recall = bias_field + grad_fun(z, delta_recall_max, !gradient_reverse);
                 delta_off = 0;
             ]]>
         </initialisation>
@@ -412,7 +412,7 @@
                     ]]>
                 </operator>
 
-                <operator kind="cross_propagation" algorithm="RK4"  propagation_dimension="x">
+                <operator kind="cross_propagation" algorithm="RK4"  propagation_dimension="z">
 
                     <integration_vectors>probe</integration_vectors>
 
@@ -429,7 +429,7 @@
                     </boundary_condition>
 
                     <![CDATA[
-                        dE_dx = i*g*Ni*phi_ge/c;
+                        dE_dz = i*g*Ni*phi_ge/c;
                     ]]>
                 </operator>
 
@@ -453,7 +453,7 @@
 
     <output filename="1Dgem-order" format="hdf5">
         <group>
-            <sampling basis="x">
+            <sampling basis="z">
                 <moments>ER EI  grad  ctrl  phi_geR phi_geI  phi_gsR phi_gsI detuning Ni_atoms</moments>
                 <dependencies>state probe gradient_field interacting_atoms</dependencies>
                 <![CDATA[

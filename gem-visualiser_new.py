@@ -2,23 +2,23 @@
 """
 Gradient Echo Memory (GEM) XMDS2 Output Visualizer — EIT multi-mF edition
 --------------------------------------------------------------------------
-Supports both 1D (shape: t,x) and 3D (shape: t,x,y,z) XMDS2 outputs.
+Supports both 1D (shape: t,z) and 3D (shape: t,z,x,y) XMDS2 outputs.
 Extra mF=0 and mF=-1 levels are loaded when present; otherwise they are
 treated as zero.
 
 Panels (all modes):
-  1. Spatial profiles over x at selected time  [time slider]
-  2. Probe intensity at x=0 and x=x_max vs all time
-  3. Spin-wave magnitude heatmap         (x vs t)  [mF selector]
-  4. Spin-wave phase heatmap             (x vs t)  [same mF]
-  5. Probe intensity |E|² heatmap        (x vs t)
-  6. Excited coherence magnitude heatmap (x vs t)  [same mF]
-  7. Excited coherence phase heatmap     (x vs t)  [same mF]
+  1. Spatial profiles over z at selected time  [time slider]
+  2. Probe intensity at z=0 and z=z_max vs all time
+  3. Spin-wave magnitude heatmap         (z vs t)  [mF selector]
+  4. Spin-wave phase heatmap             (z vs t)  [same mF]
+  5. Probe intensity |E|² heatmap        (z vs t)
+  6. Excited coherence magnitude heatmap (z vs t)  [same mF]
+  7. Excited coherence phase heatmap     (z vs t)  [same mF]
 
 Additional 3D panel:
-  8. Control-field transverse profile (y–z plane) at selected x and t
+  8. Control-field transverse profile (x–y plane) at selected z and t
 
-In 3D mode all 1D-style panels use fields averaged over y and z.
+In 3D mode all 1D-style panels use fields averaged over x and y.
 
 Usage:
     python gem-visualiser_new.py [path_to_hdf5_file]
@@ -46,7 +46,6 @@ h5_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_FILE
 with h5py.File(h5_path, "r") as f:
     g = f["1"]
     t_arr    = g["t"][:]
-    x_arr    = g["x"][:]
     EI       = g["EI"][:]
     ER       = g["ER"][:]
     phi_geR  = g["phi_geR"][:]
@@ -57,8 +56,19 @@ with h5py.File(h5_path, "r") as f:
     grad     = g["grad"][:]
     detuning = g["detuning"][:]
     Ni       = g["Ni_atoms"][:]
-    y_arr    = g["y"][:] if "y" in g else None
-    z_arr    = g["z"][:] if "z" in g else None
+
+    # Coordinates: z is the propagation axis, x and y are transverse (3D only).
+    # Outputs from the older x-propagation sims (x-propagation branch) use x as the
+    # propagation axis and (y, z) as transverse; the array layout is the same
+    # (t, propagation, transverse, transverse), so only the coordinate names are remapped.
+    if "y" in g:                    # 3D
+        if g["z"][0] < 0:           # old layout: z is transverse (symmetric about 0)
+            z_arr, x_arr, y_arr = g["x"][:], g["y"][:], g["z"][:]
+        else:
+            z_arr, x_arr, y_arr = g["z"][:], g["x"][:], g["y"][:]
+    else:                           # 1D
+        z_arr = g["z"][:] if "z" in g else g["x"][:]
+        x_arr = y_arr = None
 
     def _load_or_zeros(key):
         return g[key][:] if key in g else np.zeros_like(ER)
@@ -73,14 +83,14 @@ with h5py.File(h5_path, "r") as f:
     phi_gsm1I = _load_or_zeros("phi_gsm1I")
 
 # ── dimensionality ─────────────────────────────────────────────────────────────
-is_3d = EI.ndim == 4   # shape (n_t, n_x, n_y, n_z)
+is_3d = EI.ndim == 4   # shape (n_t, n_z, n_x, n_y)
 
 if is_3d:
     ctrl_trans_3d = ctrl.copy()
     E_trans_3d    = ER**2 + EI**2
-    x_ci          = 0
+    z_ci          = 0
+    x_mm          = x_arr * 1e3
     y_mm          = y_arr * 1e3
-    z_mm          = z_arr * 1e3
     for _arr_name in ("EI", "ER", "phi_geR", "phi_geI", "phi_gsR", "phi_gsI",
                       "ctrl", "grad", "detuning", "Ni",
                       "phi_ge0R", "phi_ge0I", "phi_gs0R", "phi_gs0I",
@@ -115,7 +125,7 @@ phi_gem1_mag   = np.sqrt(phi_gem1_2)
 phi_gem1_phase = np.angle(phi_gem1R + 1j * phi_gem1I)
 
 t_us = t_arr * 1e6
-x_mm = x_arr * 1e3
+z_mm = z_arr * 1e3
 
 E_in  = E_int[:, 0]
 E_out = E_int[:, -1]
@@ -234,7 +244,7 @@ r0 = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=outer[0],
 ax_main = fig.add_subplot(r0[0])
 ax_ctrl = fig.add_subplot(r0[1], facecolor=PANEL)
 
-style_ax(ax_main, xlabel="x  (mm)", ylabel="field amplitude / intensity  (arb.)")
+style_ax(ax_main, xlabel="z  (mm)", ylabel="field amplitude / intensity  (arb.)")
 ax_right = ax_main.twinx()
 ax_right.set_facecolor(PANEL)
 ax_right.tick_params(colors="#AAAAAA", labelsize=8)
@@ -260,10 +270,10 @@ if is_3d:
     ax_trans = fig.add_subplot(r1[4])
 
 style_ax(ax_io,    xlabel="time  (µs)", ylabel=r"$|E|^2$  (arb.)")
-style_ax(ax_heat,  xlabel="time  (µs)", ylabel="x  (mm)")
-style_ax(ax_phase, xlabel="time  (µs)", ylabel="x  (mm)")
+style_ax(ax_heat,  xlabel="time  (µs)", ylabel="z  (mm)")
+style_ax(ax_phase, xlabel="time  (µs)", ylabel="z  (mm)")
 if is_3d:
-    style_ax(ax_trans, xlabel="y  (mm)", ylabel="z  (mm)")
+    style_ax(ax_trans, xlabel="x  (mm)", ylabel="y  (mm)")
 
 ax_radio_bg.set_facecolor(PANEL)
 ax_radio_bg.axis("off")
@@ -276,17 +286,17 @@ ax_E_heat   = fig.add_subplot(r2_h[0])
 ax_ge_heat  = fig.add_subplot(r2_h[1])
 ax_ge_phase = fig.add_subplot(r2_h[2])
 
-style_ax(ax_E_heat,   xlabel="time  (µs)", ylabel="x  (mm)")
-style_ax(ax_ge_heat,  xlabel="time  (µs)", ylabel="x  (mm)")
-style_ax(ax_ge_phase, xlabel="time  (µs)", ylabel="x  (mm)")
+style_ax(ax_E_heat,   xlabel="time  (µs)", ylabel="z  (mm)")
+style_ax(ax_ge_heat,  xlabel="time  (µs)", ylabel="z  (mm)")
+style_ax(ax_ge_phase, xlabel="time  (µs)", ylabel="z  (mm)")
 
-# Row 3: time slider + optional x-position slider (3D)
+# Row 3: time slider + optional z-position slider (3D)
 if is_3d:
     r3 = gridspec.GridSpecFromSubplotSpec(
         2, 3, subplot_spec=outer[3],
         width_ratios=[0.04, 5, 0.04], wspace=0.01, hspace=1.4)
     ax_sl   = fig.add_subplot(r3[0, 1])
-    ax_sl_x = fig.add_subplot(r3[1, 1])
+    ax_sl_z = fig.add_subplot(r3[1, 1])
 else:
     r3 = gridspec.GridSpecFromSubplotSpec(
         1, 3, subplot_spec=outer[3],
@@ -302,16 +312,16 @@ for attr in ("label", "valtext"):
     getattr(slider, attr).set_fontsize(9)
 
 if is_3d:
-    ax_sl_x.set_facecolor(PANEL)
-    slider_x = Slider(ax=ax_sl_x, label="x  (mm)",
-                      valmin=x_mm.min(), valmax=x_mm.max(), valinit=x_mm[x_ci],
+    ax_sl_z.set_facecolor(PANEL)
+    slider_z = Slider(ax=ax_sl_z, label="z  (mm)",
+                      valmin=z_mm.min(), valmax=z_mm.max(), valinit=z_mm[z_ci],
                       color="#55C464", initcolor="#55C464", track_color="#22223A")
     for attr in ("label", "valtext"):
-        getattr(slider_x, attr).set_color(TC)
-        getattr(slider_x, attr).set_fontsize(9)
+        getattr(slider_z, attr).set_color(TC)
+        getattr(slider_z, attr).set_fontsize(9)
 
 # ── global titles ─────────────────────────────────────────────────────────────
-mode_str = "3D — y,z averaged for x-profiles" if is_3d else "1D"
+mode_str = "3D — x,y averaged for z-profiles" if is_3d else "1D"
 fig.text(0.5, 0.975,
          f"Gradient Echo Memory — XMDS2 Simulation (EIT)  [{mode_str}]",
          ha="center", color="#EEEEFF", fontsize=13, fontweight="bold")
@@ -319,22 +329,22 @@ time_annot = fig.text(0.5, 0.948, f"t = {t_us[0]:.4f} µs",
                       ha="center", color="#88BBFF", fontsize=10)
 
 ax_main.set_title(
-    "Spatial profiles at selected time" + (" (y,z averaged)" if is_3d else ""),
+    "Spatial profiles at selected time" + (" (x,y averaged)" if is_3d else ""),
     color="#AABBFF", fontsize=8.5, pad=4)
-ax_io.set_title(r"Probe intensity: input ($x=0$) & output ($x=x_{max}$)",
+ax_io.set_title(r"Probe intensity: input ($z=0$) & output ($z=z_{max}$)",
                 color="#AABBFF", fontsize=8.5, pad=4)
-ax_heat.set_title(r"Spin-wave $|\varphi_{gs}|$ ($m_F=1$) — $x$–$t$ heatmap",
+ax_heat.set_title(r"Spin-wave $|\varphi_{gs}|$ ($m_F=1$) — $z$–$t$ heatmap",
                   color="#AABBFF", fontsize=8.5, pad=4)
-ax_phase.set_title(r"Spin-wave phase ($m_F=1$) — $x$–$t$ heatmap",
+ax_phase.set_title(r"Spin-wave phase ($m_F=1$) — $z$–$t$ heatmap",
                    color="#AABBFF", fontsize=8.5, pad=4)
-ax_E_heat.set_title(r"Probe intensity $|E|^2$ — $x$–$t$ heatmap",
+ax_E_heat.set_title(r"Probe intensity $|E|^2$ — $z$–$t$ heatmap",
                     color="#AABBFF", fontsize=8.5, pad=4)
-ax_ge_heat.set_title(r"Excited coherence $|\varphi_{ge}|$ ($m_F=1$) — $x$–$t$ heatmap",
+ax_ge_heat.set_title(r"Excited coherence $|\varphi_{ge}|$ ($m_F=1$) — $z$–$t$ heatmap",
                      color="#AABBFF", fontsize=8.5, pad=4)
-ax_ge_phase.set_title(r"Excited coherence phase ($m_F=1$) — $x$–$t$ heatmap",
+ax_ge_phase.set_title(r"Excited coherence phase ($m_F=1$) — $z$–$t$ heatmap",
                       color="#AABBFF", fontsize=8.5, pad=4)
 if is_3d:
-    ax_trans.set_title(rf"ctrl  $y$–$z$ at $x={x_mm[x_ci]:.2f}$ mm",
+    ax_trans.set_title(rf"ctrl  $x$–$y$ at $z={z_mm[z_ci]:.2f}$ mm",
                        color="#AABBFF", fontsize=8.5, pad=4)
 
 # ── checkboxes ────────────────────────────────────────────────────────────────
@@ -366,22 +376,22 @@ for lbl in radio_heat.labels:
 line_objs = {}
 for key in check_keys:
     ax = ax_right if key in RIGHT_KEYS else ax_main
-    (ln,) = ax.plot(x_mm, DATA_MAP[key][0, :],
+    (ln,) = ax.plot(z_mm, DATA_MAP[key][0, :],
                     color=COLORS[key],
                     lw=1.6 if key in LEFT_KEYS else 1.0,
                     alpha=0.9, label=LABELS[key],
                     visible=default_active[check_keys.index(key)])
     line_objs[key] = ln
 
-ax_main.set_xlim(x_mm.min(), x_mm.max())
+ax_main.set_xlim(z_mm.min(), z_mm.max())
 
 if is_3d:
-    xline_main = ax_main.axvline(x_mm[x_ci], color="#55FF55",
+    zline_main = ax_main.axvline(z_mm[z_ci], color="#55FF55",
                                  lw=1.0, ls=":", alpha=0.7)
 
 # ── probe I/O traces ──────────────────────────────────────────────────────────
-ax_io.plot(t_us, E_in,  color="#4C9BE8", lw=1.4, label=r"$x=0$ (input)")
-ax_io.plot(t_us, E_out, color="#E8734C", lw=1.4, label=r"$x=x_{max}$ (output)")
+ax_io.plot(t_us, E_in,  color="#4C9BE8", lw=1.4, label=r"$z=0$ (input)")
+ax_io.plot(t_us, E_out, color="#E8734C", lw=1.4, label=r"$z=z_{max}$ (output)")
 ax_io.set_xlim(t_us.min(), t_us.max())
 ax_io.legend(fontsize=7.5, facecolor=BG, edgecolor=SPINE, labelcolor=TC)
 vline_io = ax_io.axvline(t_us[0], color="#FFFF88", lw=1.1, ls="--", alpha=0.85)
@@ -392,7 +402,7 @@ norm_h0, is_log0 = _make_norm(_gs_mag0)
 
 im = ax_heat.imshow(
     _gs_mag0.T, origin="lower", aspect="auto",
-    extent=[t_us.min(), t_us.max(), x_mm.min(), x_mm.max()],
+    extent=[t_us.min(), t_us.max(), z_mm.min(), z_mm.max()],
     cmap="inferno", norm=norm_h0, interpolation="bilinear",
 )
 cbar = fig.colorbar(im, ax=ax_heat, pad=0.02, fraction=0.035)
@@ -404,7 +414,7 @@ vline_heat = ax_heat.axvline(t_us[0], color="#FFFF88", lw=1.1, ls="--", alpha=0.
 
 im_phase = ax_phase.imshow(
     _mask_phase(_gs_mag0, _gs_phase0).T, origin="lower", aspect="auto",
-    extent=[t_us.min(), t_us.max(), x_mm.min(), x_mm.max()],
+    extent=[t_us.min(), t_us.max(), z_mm.min(), z_mm.max()],
     cmap="hsv", vmin=-np.pi, vmax=np.pi, interpolation="bilinear",
 )
 cbar_phase = fig.colorbar(im_phase, ax=ax_phase, pad=0.02, fraction=0.035)
@@ -419,9 +429,9 @@ vline_phase = ax_phase.axvline(t_us[0], color="#FFFF88", lw=1.1, ls="--", alpha=
 if is_3d:
     trans_vmax = ctrl_trans_3d.max()
     im_trans = ax_trans.imshow(
-        ctrl_trans_3d[0, x_ci, :, :],
+        ctrl_trans_3d[0, z_ci, :, :].T,   # (x, y) -> rows = y (vertical)
         origin="lower", aspect="auto",
-        extent=[y_mm.min(), y_mm.max(), z_mm.min(), z_mm.max()],
+        extent=[x_mm.min(), x_mm.max(), y_mm.min(), y_mm.max()],
         cmap="magma", vmin=0, vmax=trans_vmax if trans_vmax > 0 else 1,
         interpolation="bilinear",
     )
@@ -442,7 +452,7 @@ else:
 
 im_E = ax_E_heat.imshow(
     E_int.T, origin="lower", aspect="auto",
-    extent=[t_us.min(), t_us.max(), x_mm.min(), x_mm.max()],
+    extent=[t_us.min(), t_us.max(), z_mm.min(), z_mm.max()],
     cmap="viridis", norm=norm_E, interpolation="bilinear",
 )
 cbar_E = fig.colorbar(im_E, ax=ax_E_heat, pad=0.02, fraction=0.035)
@@ -456,7 +466,7 @@ norm_ge0, is_ge_log0 = _make_norm(_ge_mag0)
 
 im_ge = ax_ge_heat.imshow(
     _ge_mag0.T, origin="lower", aspect="auto",
-    extent=[t_us.min(), t_us.max(), x_mm.min(), x_mm.max()],
+    extent=[t_us.min(), t_us.max(), z_mm.min(), z_mm.max()],
     cmap="inferno", norm=norm_ge0, interpolation="bilinear",
 )
 cbar_ge = fig.colorbar(im_ge, ax=ax_ge_heat, pad=0.02, fraction=0.035)
@@ -468,7 +478,7 @@ vline_ge_heat = ax_ge_heat.axvline(t_us[0], color="#FFFF88", lw=1.1, ls="--", al
 
 im_ge_phase = ax_ge_phase.imshow(
     _mask_phase(_ge_mag0, _ge_phase0).T, origin="lower", aspect="auto",
-    extent=[t_us.min(), t_us.max(), x_mm.min(), x_mm.max()],
+    extent=[t_us.min(), t_us.max(), z_mm.min(), z_mm.max()],
     cmap="hsv", vmin=-np.pi, vmax=np.pi, interpolation="bilinear",
 )
 cbar_ge_phase = fig.colorbar(im_ge_phase, ax=ax_ge_phase, pad=0.02, fraction=0.035)
@@ -510,10 +520,10 @@ def autoscale_spatial():
 
 autoscale_spatial()
 
-# ── x-index helper (3D) ───────────────────────────────────────────────────────
+# ── z-index helper (3D) ───────────────────────────────────────────────────────
 if is_3d:
-    def x_idx(x_val_mm):
-        return int(np.argmin(np.abs(x_mm - x_val_mm)))
+    def z_idx(z_val_mm):
+        return int(np.argmin(np.abs(z_mm - z_val_mm)))
 
 # ── mF heatmap switch callback ────────────────────────────────────────────────
 def switch_heatmap(label):
@@ -527,9 +537,9 @@ def switch_heatmap(label):
     cbar.set_label(r"$|\varphi_{gs}|$  (arb., log)" if is_log_gs else r"$|\varphi_{gs}|$  (arb.)",
                    color=TC, fontsize=8)
     im_phase.set_data(_mask_phase(gs_mag, gs_phase).T)
-    ax_heat.set_title(r"Spin-wave $|\varphi_{gs}|$ (" + label + r") — $x$–$t$ heatmap",
+    ax_heat.set_title(r"Spin-wave $|\varphi_{gs}|$ (" + label + r") — $z$–$t$ heatmap",
                       color="#AABBFF", fontsize=8.5, pad=4)
-    ax_phase.set_title(r"Spin-wave phase (" + label + r") — $x$–$t$ heatmap",
+    ax_phase.set_title(r"Spin-wave phase (" + label + r") — $z$–$t$ heatmap",
                        color="#AABBFF", fontsize=8.5, pad=4)
 
     norm_ge, is_log_ge = _make_norm(ge_mag)
@@ -539,9 +549,9 @@ def switch_heatmap(label):
     cbar_ge.set_label(r"$|\varphi_{ge}|$  (arb., log)" if is_log_ge else r"$|\varphi_{ge}|$  (arb.)",
                       color=TC, fontsize=8)
     im_ge_phase.set_data(_mask_phase(ge_mag, ge_phase).T)
-    ax_ge_heat.set_title(r"Excited coherence $|\varphi_{ge}|$ (" + label + r") — $x$–$t$ heatmap",
+    ax_ge_heat.set_title(r"Excited coherence $|\varphi_{ge}|$ (" + label + r") — $z$–$t$ heatmap",
                          color="#AABBFF", fontsize=8.5, pad=4)
-    ax_ge_phase.set_title(r"Excited coherence phase (" + label + r") — $x$–$t$ heatmap",
+    ax_ge_phase.set_title(r"Excited coherence phase (" + label + r") — $z$–$t$ heatmap",
                           color="#AABBFF", fontsize=8.5, pad=4)
     fig.canvas.draw_idle()
 
@@ -562,28 +572,28 @@ def update(val):
     vline_ge_heat .set_xdata([t_now, t_now])
     vline_ge_phase.set_xdata([t_now, t_now])
     if is_3d:
-        xi = x_idx(slider_x.val)
-        im_trans.set_data(ctrl_trans_3d[ti, xi, :, :])
+        zi = z_idx(slider_z.val)
+        im_trans.set_data(ctrl_trans_3d[ti, zi, :, :].T)
         ax_trans.set_title(
-            rf"ctrl  $y$–$z$ at $x={x_mm[xi]:.2f}$ mm, $t={t_now:.2f}$ µs",
+            rf"ctrl  $x$–$y$ at $z={z_mm[zi]:.2f}$ mm, $t={t_now:.2f}$ µs",
             color="#AABBFF", fontsize=8.5, pad=4)
     fig.canvas.draw_idle()
 
 slider.on_changed(update)
 
 if is_3d:
-    def update_x(val):
+    def update_z(val):
         ti    = t_idx(slider.val)
-        xi    = x_idx(slider_x.val)
+        zi    = z_idx(slider_z.val)
         t_now = t_us[ti]
-        im_trans.set_data(ctrl_trans_3d[ti, xi, :, :])
-        xline_main.set_xdata([x_mm[xi], x_mm[xi]])
+        im_trans.set_data(ctrl_trans_3d[ti, zi, :, :].T)
+        zline_main.set_xdata([z_mm[zi], z_mm[zi]])
         ax_trans.set_title(
-            rf"ctrl  $y$–$z$ at $x={x_mm[xi]:.2f}$ mm, $t={t_now:.2f}$ µs",
+            rf"ctrl  $x$–$y$ at $z={z_mm[zi]:.2f}$ mm, $t={t_now:.2f}$ µs",
             color="#AABBFF", fontsize=8.5, pad=4)
         fig.canvas.draw_idle()
 
-    slider_x.on_changed(update_x)
+    slider_z.on_changed(update_z)
 
 def toggle(label):
     key = check_keys[check_labels.index(label)]
