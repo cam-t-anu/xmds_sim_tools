@@ -1,0 +1,695 @@
+<simulation xmds-version="2">
+    <name>3DGEM3L.out</name>
+    <author>Cam</author>
+    <description>
+        3D gradient echo memory (GEM) in a Lambda-type three-level atomic ensemble.
+
+        The probe field E propagates along x through the memory (cross-propagation in x,
+        with transverse diffraction in y and z), while the atomic coherences evolve in t.
+        Storage: the probe is absorbed by an off-resonant Raman transition with a linear
+        two-photon detuning gradient along x. Recall: the gradient is flipped, the spin
+        wave rephases and the probe is re-emitted as an echo.
+
+        Implemented:
+        -Atomic density
+            *transverse: gaussian, smoothed hat, or uniform
+            *longitudinal: smoothed or hard hat
+            *optional atom dynamics: ballistic (thermal) expansion and gravitational sag
+             after the atoms are released from the trap
+        -Control beam
+            *uniform, or a tilted gaussian transverse profile
+        -Probe beam
+            *arbitrary pulse shapes from a Hermite-Gaussian basis (up to 4th order)
+            *gaussian beam profile focused at the centre of the memory, small input angles
+            *the transverse window is the memory cross-section, with periodic boundaries
+             (no absorbing layer; see 3DGEM3L_sponge.xmds for the padded version)
+        -Memory
+            *weak-probe approximation: populations are held fixed (all atoms in |g>),
+             only the coherences phi_ge, phi_gs and phi_es evolve
+            *AC Stark shift of the two-photon resonance from the control field
+    </description>
+
+    <features>
+        <fftw plan="patient" />
+        <openmp threads="1"/> <!-- in the 2D sim more threads were much slower (4 threads ~3x, 10 threads ~5x); untested here, where the grids are 64x larger -->
+        <auto_vectorise />
+        <diagnostics />
+        <benchmark />
+        <globals>
+            <![CDATA[
+
+            // ================================================================
+            // Physical constants and atomic parameters (87Rb D1 line)
+            // ================================================================
+            const double pi = M_PI;
+            const double c = 3e8; //speed of light (m/s)
+            const double boltzmann_const = 1.380649e-23; //(J/K)
+            const double mass_Rb = 1.44316060e-25; //mass of a rubidium-87 atom (kg)
+
+            double Gamma = 2*pi * 5.75e6; //decay rate of the excited state (rad/s)
+            double GammaC = 2*pi * 0.5e3; //decay rate due to inelastic collisions (rad/s)
+            double GammaD = 2*pi * 2e3; //decay rate due to elastic collisions and atoms moving in and out of the interaction region (rad/s)
+            double g = 170110; //probe-atom coupling strength for the mF = +1 transition
+
+            //coherence decay rates
+            double gamma_ge = Gamma/2 + GammaD + GammaC; //optical coherence
+            double gamma_es = gamma_ge; //optical coherence
+            double gamma_gs = GammaD + GammaC; //ground-state (spin-wave) coherence
+
+            //characteristic time and frequency; most timings and frequencies are given in these units
+            double t_char = pi/Gamma; //= 86.957 ns
+            double f_char = Gamma/pi; //= 11.5 MHz
+
+            // Probe wavelength
+            double probe_wavelength = 795e-9; //(m)
+            double k0 = 2*pi / probe_wavelength; //probe wavenumber (1/m)
+
+            // ================================================================
+            // Memory geometry (the x grid in <geometry> must match x_mem_min..x_mem_max)
+            // ================================================================
+            double x_mem_min = 0; //(m)
+            double x_mem_max = 0.03; //(m)
+            double mem_len = x_mem_max - x_mem_min;
+            double half_mem_len = mem_len/2;
+            double mem_width = 0.0004; //memory cross-section in y (m)
+            double mem_height = 0.0004; //memory cross-section in z (m)
+
+            // ================================================================
+            // Timing, as fractions of the total simulated time tmax
+            // ================================================================
+            double tmax = 575*t_char; //total simulated time (= 50 us), must match the integrate interval
+            double store_end_time = 0.35; //control beam switched off (storage starts)
+            double retrieve_start_time = 0.52; //control beam switched back on (retrieval starts)
+            double gradient_flip_time; //gradient flipped from store to recall (set from the arguments)
+
+            // ================================================================
+            // Atomic density (set from the arguments)
+            // ================================================================
+            double Num_atoms; //number of atoms in the pumped (mF = +1) state
+            double trans_dens_factor; //transverse gaussian std dev, as a fraction of mem_width; 0 = use a hat or uniform profile instead
+            bool trans_uniform; //only used when trans_dens_factor == 0: true = uniform, false = smoothed hat over the memory cross-section (here the whole window)
+            double trans_edge_sharpness = 2e4; //(1/m) edge sharpness of the transverse hat, gives an edge std dev of 1/(sqrt(2)*2e4) = 35 um (~3.5 y grid cells)
+            double long_dens_width_factor; //width of the longitudinal hat, as a fraction of mem_len
+            double long_dens_sharpness; //(1/m) edge sharpness of the longitudinal hat; 0 = hard edges
+            bool atom_dynamics; //true = density evolves in time (expansion and gravity), false = static density
+            double temperature; //atom temperature, sets the thermal expansion rate (K)
+            double t_offset; //time between releasing the atoms and t = 0 (s)
+
+            // ================================================================
+            // Detunings (set from the arguments)
+            // ================================================================
+            double Delta; //single-photon detuning (rad/s)
+            double delta_store_max; //two-photon detuning spread across the memory while storing (rad/s)
+            double delta_recall_max; //two-photon detuning spread across the memory while recalling (rad/s)
+            double bias_field; //uniform two-photon detuning offset (rad/s)
+            double gradient_reverse; //0 = standard gradient direction, 1 = reversed
+
+            // ================================================================
+            // Control beam (set from the arguments)
+            // ================================================================
+            double Omega_GEM; //control field Rabi frequency (rad/s)
+            bool gaussian_control_beam; //true = tilted gaussian beam profile, false = uniform
+            double control_beam_std_dev; //gaussian std dev (m); 0.001 gives 0.98 of the peak at the memory edge
+            double control_beam_offset; //y offset of the beam centre at the middle of the memory (m), positive = up
+            double control_beam_angle; //angle between the control and probe beams in the x-y plane (rad), 0 = co-propagating
+
+            // ================================================================
+            // Probe pulse (time envelope) and beam (transverse profile)
+            // ================================================================
+            double E0 = 1e-3; //probe amplitude
+            double pulsewidth; //(s) width parameter of the Hermite-Gaussian pulse, the full pulse is ~8*pulsewidth long
+            double tin; //(s) time of the input pulse centre
+            double num_pulses; //1 = single pulse, 2 = two-pulse train
+            double t_gap; //(s) time between the two pulses
+            double pulse_phase_diff; //(rad) phase of the first pulse relative to the second
+            double pulse_mag_diff; //fractional amplitude reduction of the first pulse
+            double coeff_0; //Hermite-Gaussian mode coefficients of the pulse shape
+            double coeff_1;
+            double coeff_2;
+            double coeff_3;
+            double coeff_4;
+            double pulse_modulation_frequency; //(rad/s) optional sinusoidal modulation of the pulse, 0 = off
+
+            double probe_waist_mid = 0.0001; //probe beam waist at the centre of the memory (m)
+            double probe_beam_azimuth_angle = 0.0; //probe input angle in the x-y plane (rad), keep below mem_width/mem_len = 0.0133
+
+            // ================================================================
+            // Time-dependent values, updated once per integration step
+            // ================================================================
+            double g_flip; //gradient_flip_fraction(t)
+            double ctrl_switch; //control_switch(t)
+            complex probe_t_env; //time envelope of the input probe pulse at t
+
+
+            // ================================================================
+            // Helper functions
+            // ================================================================
+
+            //normalised gaussian with standard deviation w
+            double gaussian(double x, double w){
+                return (1/(w*sqrt(2*pi)))*exp( -0.5 * pow(x,2) / pow(w,2) );
+            }
+
+            //hat function of the given width convolved with a gaussian, i.e. a hat with smooth (erf) edges.
+            //sharpness is the inverse edge width: the edge gaussian has variance 1/(2*sharpness^2).
+            //the value at each edge is height/2
+            double smoothed_hat_fun(double x, double centre, double width, double sharpness, double height){
+                return height*(0.5*erf( (x - (centre-0.5*width))*sharpness ) + 0.5*erf( (-x + (centre+0.5*width))*sharpness ));
+            }
+
+            double factorial(int n){
+                double f = 1;
+                for (int k = 2; k <= n; k++){
+                    f *= k;
+                }
+                return f;
+            }
+
+            //logistic sigmoid used to smooth on/off switching, since step changes cause convergence problems.
+            //the 10-90% rise takes ~4.4/steepness of activation_width
+            double activation_sigmoid(double x, double activation_width, double steepness = 40){
+                return 1/(1+exp(-steepness*x/activation_width));
+            }
+
+            // ----------------------------------------------------------------
+            // Control beam and gradient switching
+            // ----------------------------------------------------------------
+
+            //smoothly switches from 1 to 0 around t_end, over a time t_act
+            double control_gem_store(double time, double t_end, double t_act){
+                if      (time < t_end - t_act/2) { return 1.0; }
+                else if (time < t_end + t_act/2) { return 1-activation_sigmoid(time-t_end, t_act); }
+                else                             { return 0.0; }
+            }
+
+            //smoothly switches from 0 to 1 around t_start, over a time t_act
+            double control_gem_retrieve(double time, double t_start, double t_act){
+                if      (time < t_start - t_act/2) { return 0.0; }
+                else if (time < t_start + t_act/2) { return activation_sigmoid(time-t_start, t_act); }
+                else                               { return 1.0; }
+            }
+
+            //smoothly switches from 0 to 1 around t_flip, over a time t_act
+            double smoothed_gradient_flip(double time, double t_flip, double t_act){
+                if      (time < t_flip - t_act/2) { return 0; }
+                else if (time < t_flip + t_act/2) { return activation_sigmoid(time-t_flip, t_act); }
+                else                              { return 1; }
+            }
+
+            //fraction of the way from the store gradient (0) to the recall gradient (1) at time t
+            double gradient_flip_fraction(double time){
+                return smoothed_gradient_flip(time, gradient_flip_time*tmax, 25*t_char);
+            }
+
+            //control beam envelope at time t: on while storing, off during storage, on again for retrieval
+            double control_switch(double time){
+                return control_gem_store(time, store_end_time*tmax, 10*t_char) + control_gem_retrieve(time, retrieve_start_time*tmax, 10*t_char);
+            }
+
+            //two-photon detuning along the memory: varies linearly from -grad_max/2 at x_mem_min to +grad_max/2 at x_mem_max
+            //(the other way round if inv is true)
+            double grad_fun(double x, double grad_max, bool inv){
+                double profile = grad_max*( 0.5 + (x-x_mem_max)/mem_len );
+                return inv ? -profile : profile;
+            }
+
+            // ----------------------------------------------------------------
+            // Atomic density
+            // ----------------------------------------------------------------
+
+            //transverse smoothed hat of the given width, centred on 0, so the atoms stop at the edge of the memory.
+            //the window here is the memory cross-section, so the hat's half-height edges sit on the window boundary.
+            //Ballistic expansion only blurs the edges, as for the longitudinal
+            //profile (see density_dyn_x): 1/s_t^2 = 1/s^2 + 2*sigma_v^2*t^2
+            double trans_hat(double r, double width, double t){
+                double inv_s2 = 1/(trans_edge_sharpness*trans_edge_sharpness) + 2*t*t*boltzmann_const*temperature/mass_Rb;
+                return smoothed_hat_fun(r, 0, width, 1/sqrt(inv_s2), 1);
+            }
+
+            //longitudinal hard hat of width long_dens_width_factor*mem_len, centred in the memory
+            double hard_hat_x(double x){
+                double half_width = 0.5*long_dens_width_factor*mem_len;
+                return (x < half_mem_len-half_width || x > half_mem_len+half_width) ? 0 : 1;
+            }
+
+            //static (unnormalised) density, the atoms don't move
+            double density_func_static(double x, double y, double z){
+                double t_density = 1;
+                double l_density = 1;
+                if (trans_dens_factor != 0){
+                    t_density = gaussian(sqrt(y*y+z*z), trans_dens_factor*mem_width);
+                } else if (!trans_uniform){
+                    t_density = trans_hat(y, mem_width, 0)*trans_hat(z, mem_height, 0); //rectangular cross-section, matching the normalisation region
+                }
+                if (long_dens_sharpness != 0){
+                    l_density = smoothed_hat_fun(x, half_mem_len, long_dens_width_factor*mem_len, long_dens_sharpness, 1);
+                } else if (long_dens_width_factor != 1){
+                    l_density = hard_hat_x(x);
+                }
+                return l_density*t_density;
+            }
+
+            //the dynamic density is separable, density_func_dyn(x,y,z,t) = density_dyn_x(x,t)*density_dyn_y(y,t)*density_dyn_z(z,t),
+            //so each part can be evaluated on its own 1D grid (see the dens_dyn_x/y/z computed vectors).
+            //t here is the time since the atoms were released.
+
+            //transverse (y): a gaussian cloud's variance grows by sigma_v^2*t^2 (sigma_v^2 = kT/m); a hat's edges blur
+            double density_dyn_y(double y, double t){
+                if (trans_dens_factor != 0){
+                    double std_dev_trans = trans_dens_factor*mem_width;
+                    double std_dev_trans_t = sqrt(std_dev_trans*std_dev_trans + t*t*boltzmann_const*temperature/mass_Rb);
+                    return gaussian(y, std_dev_trans_t);
+                } else if (!trans_uniform){
+                    return trans_hat(y, mem_width, t);
+                }
+                return 1;
+            }
+
+            //transverse (z, vertical): as for y, plus gravity, which moves the centre of the cloud down by g*t^2/2
+            double density_dyn_z(double z, double t){
+                double z_c = z + 0.5*9.8*t*t;
+                if (trans_dens_factor != 0){
+                    double std_dev_trans = trans_dens_factor*mem_width;
+                    double std_dev_trans_t = sqrt(std_dev_trans*std_dev_trans + t*t*boltzmann_const*temperature/mass_Rb);
+                    return gaussian(z_c, std_dev_trans_t);
+                } else if (!trans_uniform){
+                    return trans_hat(z_c, mem_height, t);
+                }
+                return 1;
+            }
+
+            //longitudinal (x): free (ballistic) expansion convolves the initial profile with a gaussian of std dev sigma_v*t.
+            //the initial profile is already hat(width) convolved with a gaussian of variance 1/(2*sharpness^2), and gaussian
+            //variances add, so only the edge blur grows: 1/s_t^2 = 1/s^2 + 2*sigma_v^2*t^2. The hat width and height stay fixed
+            //(the convolution conserves atom number by itself). See Brzozowski et al. J. Opt. B 4, 62 (2002), eqs (1)-(4).
+            double density_dyn_x(double x, double t){
+                double sigma_v2 = boltzmann_const*temperature/mass_Rb; //velocity variance (m^2/s^2)
+                if (long_dens_sharpness != 0 || (long_dens_width_factor != 1 && t > 0)){
+                    double inv_s2 = (long_dens_sharpness != 0 ? 1/(long_dens_sharpness*long_dens_sharpness) : 0) + 2*t*t*sigma_v2;
+                    return (inv_s2 > 0) ? smoothed_hat_fun(x, half_mem_len, long_dens_width_factor*mem_len, 1/sqrt(inv_s2), 1) : 1;
+                } else if (long_dens_width_factor != 1){
+                    return hard_hat_x(x); //t == 0 with sharp edges
+                }
+                return 1;
+            }
+
+            double density_func_dyn(double x, double y, double z, double t){
+                return density_dyn_x(x,t)*density_dyn_y(y,t)*density_dyn_z(z,t);
+            }
+
+            double density_func(double x, double y, double z, double t){
+                return atom_dynamics ? density_func_dyn(x,y,z,t) : density_func_static(x,y,z);
+            }
+
+            // ----------------------------------------------------------------
+            // Probe pulse shape
+            // ----------------------------------------------------------------
+
+            //physicists' Hermite polynomial H_n(x)
+            double hermite_poly(int n, double x){
+                if (n == 0) { return 1; }
+                if (n == 1) { return 2*x; }
+                return 2*x*hermite_poly(n-1, x) - 2*(n-1)*hermite_poly(n-2, x);
+            }
+
+            //Hermite-Gaussian mode n (the overall constant from gaussian() is absorbed into E0)
+            double hermite_func(int n, double x){
+                double norm = 1/( sqrt( pow(2,n) * factorial(n) * sqrt(pi) ) );
+                return norm*gaussian(x,1)*hermite_poly(n, x);
+            }
+
+            //pulse shape: a sum of the first five Hermite-Gaussian modes, weighted by coeff_0..coeff_4
+            double hermite_pulse_profile(double t, double w){
+                return coeff_0*hermite_func(0, t/w) + coeff_1*hermite_func(1, t/w) + coeff_2*hermite_func(2, t/w)
+                     + coeff_3*hermite_func(3, t/w) + coeff_4*hermite_func(4, t/w);
+            }
+
+            //two pulses separated by T_gap; the first has a relative phase and reduced amplitude
+            complex two_pulse_train(double t, double w, double T_gap, double phase_diff){
+                return (1-pulse_mag_diff)*exp(i*phase_diff)*hermite_pulse_profile(t-T_gap/2, 0.25*w) + hermite_pulse_profile(t+T_gap/2, 0.25*w);
+            }
+
+            double pulse_modulation(double t){
+                return (pulse_modulation_frequency == 0) ? 1 : sin(pulse_modulation_frequency*t);
+            }
+
+            // ----------------------------------------------------------------
+            // Beam profiles
+            // ----------------------------------------------------------------
+
+            //gaussian beam envelope with waist waist_mid at x = 0, tilted by beam_azimuth_angle in the x-y plane.
+            //envelope only: the exp(i*k0*x) carrier is already factored out of E. Signs match
+            //dE/dx = (i/2k0)*laplacian(E), i.e. D = -i*k^2/(2*k0): E ~ exp(i*k0*r^2/(2q))/q, q = x - i*x0
+            complex beam_profile(double x_prime, double y_prime, double z, double beam_azimuth_angle, double waist_mid, double wavelength){
+                double x = x_prime*cos(beam_azimuth_angle) - y_prime*sin(beam_azimuth_angle);
+                double y = x_prime*sin(beam_azimuth_angle) + y_prime*cos(beam_azimuth_angle);
+
+                double beam_x0 = pi*pow(waist_mid,2)/wavelength; //Rayleigh range
+                double waist = waist_mid*sqrt(1+pow(x/beam_x0,2)); //beam waist at x
+                double beam_R = x + pow(beam_x0,2)/x; //radius of curvature at x
+                double beam_gphase = atan(x/beam_x0); //Gouy phase at x
+
+                return (waist_mid/waist) * exp(-1*(y*y+z*z)/(waist*waist)) * exp(i*k0*(y*y+z*z)/(2*beam_R) - i*beam_gphase);
+            }
+
+            //gaussian control beam (peak amplitude 1) tilted by beam_azimuth_angle in the x-y plane.
+            //the beam pivots about (x_pivot, y_offset), so y_offset is where the beam centre crosses x = x_pivot.
+            //the phase is the control's plane-wave phase k0*(propagation coordinate) relative to the exp(i*k0*x)
+            //carrier already factored out of the probe, so it vanishes when the beam is co-propagating (angle = 0).
+            complex beam_profile_simple(double x_prime, double y_prime, double z, double beam_azimuth_angle, double x_pivot, double y_offset, double std_dev){
+                x_prime = x_prime - x_pivot;
+                y_prime = y_prime - y_offset;
+
+                double x = x_prime*cos(beam_azimuth_angle) - y_prime*sin(beam_azimuth_angle); //along the control beam
+                double y = x_prime*sin(beam_azimuth_angle) + y_prime*cos(beam_azimuth_angle); //across the control beam
+
+                double amplitude_correction = sqrt(2*pi*std_dev*std_dev); //cancels the gaussian normalisation, so the peak is 1
+
+                return gaussian(sqrt(y*y+z*z), std_dev) * amplitude_correction * exp(i*k0*(x - x_prime));
+            }
+
+            ]]>
+        </globals>
+
+        <!-- Command-line arguments. With append_args_to_output_filename, every active argument is added to the
+             output filename (as .name_value), which is how xmds_sim_tools reads the parameters back.
+             Only the parameters varied in the atom-dynamics runs are active, to keep filenames under the
+             maximum length. The others are fixed in the CDATA block below: to vary one, uncomment its
+             argument here and swap the fixed value below for the argument name shown in its comment. -->
+        <arguments append_args_to_output_filename="yes">
+            <!-- atomic density -->
+            <argument name="a1"   type="real" default_value="20"/>  <!-- number of atoms in mF = +1 (x1e9) -->
+            <argument name="td"   type="real" default_value="0"/>   <!-- transverse gaussian std dev / mem_width, 0 = hat or uniform -->
+            <argument name="tu"   type="real" default_value="0"/>   <!-- if td == 0: 1 = uniform transverse density, 0 = smoothed hat -->
+            <argument name="lds"  type="real" default_value="0"/>   <!-- longitudinal edge sharpness (1/m), 0 = hard edges -->
+            <argument name="ldw"  type="real" default_value="1"/>   <!-- longitudinal width / mem_len -->
+            <!-- atom dynamics -->
+            <argument name="adyn" type="real" default_value="0"/>   <!-- 1 = expansion and gravity, 0 = static atoms -->
+            <argument name="temp" type="real" default_value="0.1"/> <!-- temperature (K) -->
+            <argument name="toff" type="real" default_value="0"/>   <!-- time from releasing the atoms to t = 0 (ms) -->
+
+            <!-- fixed parameters, see the CDATA block for their values:
+            <argument name="ds"     type="real" default_value="0.003"/>
+            <argument name="dr"     type="real" default_value="0.003"/>
+            <argument name="bias"   type="real" default_value="0.04"/>
+            <argument name="gr"     type="real" default_value="0"/>
+            <argument name="gft"    type="real" default_value="0.443"/>
+            <argument name="De"     type="real" default_value="15"/>
+            <argument name="Omg"    type="real" default_value="0.75"/>
+            <argument name="gcb"    type="real" default_value="0"/>
+            <argument name="cbsd"   type="real" default_value="0.001"/>
+            <argument name="cba"    type="real" default_value="0.005"/>
+            <argument name="cbo"    type="real" default_value="0"/>
+            <argument name="Pw"     type="real" default_value="12"/>
+            <argument name="Tin"    type="real" default_value="115"/>
+            <argument name="Np"     type="real" default_value="1"/>
+            <argument name="tgap"   type="real" default_value="40"/>
+            <argument name="pdiff"  type="real" default_value="0"/>
+            <argument name="pmdiff" type="real" default_value="0"/>
+            <argument name="mf"     type="real" default_value="0"/>
+            <argument name="c0"     type="real" default_value="1"/>
+            <argument name="c1"     type="real" default_value="0"/>
+            <argument name="c2"     type="real" default_value="0"/>
+            <argument name="c3"     type="real" default_value="0"/>
+            <argument name="c4"     type="real" default_value="0"/>
+            -->
+
+            <![CDATA[
+                //Atomic density
+                Num_atoms = a1 * 1e9;
+                trans_dens_factor = td;
+                trans_uniform = tu;
+                long_dens_sharpness = lds;
+                long_dens_width_factor = ldw;
+
+                //Atom dynamics
+                atom_dynamics = adyn;
+                temperature = temp;
+                t_offset = toff*1e-3; //ms -> s
+
+                //Gradient
+                delta_store_max = 2*pi * 0.003*f_char/mem_len; //ds
+                delta_recall_max = 2*pi * 0.003*f_char/mem_len; //dr
+                bias_field = 2*pi * 0.04*f_char; //bias
+                gradient_reverse = 0; //gr
+                gradient_flip_time = 0.443; //gft (fraction of tmax)
+
+                //Single-photon detuning
+                Delta = 2*pi * 15*f_char; //De
+
+                //Control beam
+                Omega_GEM = 2*pi * 0.75*f_char; //Omg
+                gaussian_control_beam = 0; //gcb
+                control_beam_std_dev = 0.001; //cbsd
+                control_beam_angle = 0.005; //cba
+                control_beam_offset = 0; //cbo
+
+                //Probe pulse
+                pulsewidth = 12*t_char; //Pw*t_char
+                tin = 115*t_char; //Tin*t_char
+                num_pulses = 1; //Np
+                t_gap = 0; //tgap*t_char
+                pulse_phase_diff = 0; //pdiff*pi/180
+                pulse_mag_diff = 0; //pmdiff
+                pulse_modulation_frequency = 0; //2*pi*mf*f_char
+                coeff_0 = 1; //c0
+                coeff_1 = 0; //c1
+                coeff_2 = 0; //c2
+                coeff_3 = 0; //c3
+                coeff_4 = 0; //c4
+            ]]>
+        </arguments>
+    </features>
+
+    <geometry>
+        <propagation_dimension> t </propagation_dimension>
+        <transverse_dimensions>
+            <!-- x is the propagation direction of the probe, and spans the memory (x_mem_min to x_mem_max) -->
+            <dimension name="x" lattice="128" domain="(0, 0.03)" />
+            <!-- the transverse window is the memory cross-section (mem_width = mem_height = 0.4 mm), with
+                 periodic boundaries from the FFT. There is no absorbing layer, so the probe beam (waist
+                 probe_waist_mid) must stay well inside the window -->
+            <dimension name="y" lattice="40" domain="(-0.0002, 0.0002)" />
+            <dimension name="z" lattice="40" domain="(-0.0002, 0.0002)" />
+        </transverse_dimensions>
+    </geometry>
+
+    <!-- atomic density matrix elements; all atoms start in the ground state |g> -->
+    <vector name="state" type="complex" dimensions="x y z">
+        <components>phi_gg phi_ss phi_ee phi_es phi_ge phi_gs</components>
+        <initialisation>
+            <![CDATA[
+                phi_gg = 1.0;
+                phi_ss = phi_ee = phi_es = phi_ge = phi_gs = 0;
+            ]]>
+        </initialisation>
+    </vector>
+
+    <!-- probe field envelope (the exp(i*k0*x) carrier is factored out) -->
+    <vector name="probe" type="complex" dimensions="x y z">
+        <components> E </components>
+    </vector>
+
+    <!-- density at the moment the atoms are released, used for the normalisation (and as the static density) -->
+    <vector name="atom_density_dist" type="real" dimensions="x y z">
+        <components> density </components>
+        <initialisation>
+            <![CDATA[
+                density = density_func(x,y,z,0);
+            ]]>
+        </initialisation>
+    </vector>
+
+    <!-- mean density over the memory cross-section, so that Num_atoms sets the atom number in the memory -->
+    <vector name="atom_norm" type="real" dimensions="">
+        <components> a_norm count </components>
+        <initialisation>
+            <dependencies>atom_density_dist</dependencies>
+            <![CDATA[
+                //the window is the memory cross-section, so every point counts.
+                //xmds integrates over x, y and z itself (weighted by dx*dy*dz, which cancels in a_norm/count),
+                //so assign the per-point value here rather than accumulating with +=
+                a_norm = density;
+                count = 1;
+            ]]>
+        </initialisation>
+    </vector>
+
+    <!-- transverse profile of the input probe at the memory entrance (focused at the memory centre);
+         it doesn't change in time, so it is computed once -->
+    <vector name="probe_input" type="complex" dimensions="y z">
+        <components> E_in </components>
+        <initialisation>
+            <![CDATA[
+                E_in = beam_profile(-half_mem_len, y, z, probe_beam_azimuth_angle, probe_waist_mid, probe_wavelength);
+            ]]>
+        </initialisation>
+    </vector>
+
+    <!-- separable parts of the dynamic density, evaluated on the 1D x, y and z grids instead of the full 3D grid.
+         t + t_offset is the time since the atoms were released -->
+    <computed_vector name="dens_dyn_x" type="real" dimensions="x">
+        <components> dens_x </components>
+        <evaluation>
+            <![CDATA[
+                dens_x = atom_dynamics ? density_dyn_x(x, t+t_offset) : 1;
+            ]]>
+        </evaluation>
+    </computed_vector>
+
+    <computed_vector name="dens_dyn_y" type="real" dimensions="y">
+        <components> dens_y </components>
+        <evaluation>
+            <![CDATA[
+                dens_y = atom_dynamics ? density_dyn_y(y, t+t_offset) : 1;
+            ]]>
+        </evaluation>
+    </computed_vector>
+
+    <computed_vector name="dens_dyn_z" type="real" dimensions="z">
+        <components> dens_z </components>
+        <evaluation>
+            <![CDATA[
+                dens_z = atom_dynamics ? density_dyn_z(z, t+t_offset) : 1;
+            ]]>
+        </evaluation>
+    </computed_vector>
+
+    <!-- number of interacting atoms at each point. A computed vector, so with atom dynamics it is
+         re-evaluated at the current t wherever it is used (each integration stage and each sample) -->
+    <computed_vector name="interacting_atoms" type="real" dimensions="x y z">
+        <components> Ni </components>
+        <evaluation>
+            <dependencies>atom_norm atom_density_dist dens_dyn_x dens_dyn_y dens_dyn_z</dependencies>
+            <![CDATA[
+                if (atom_dynamics) {
+                    Ni = Num_atoms * dens_x*dens_y*dens_z / (a_norm/count); //= density_func_dyn(x,y,z,t+t_offset)
+                } else {
+                    Ni = Num_atoms * density / (a_norm/count);
+                }
+            ]]>
+        </evaluation>
+    </computed_vector>
+
+    <!-- two-photon detuning along the memory for the store and recall stages; the integrator blends
+         between them as the gradient is flipped -->
+    <vector name="gradient_field" type="real" dimensions="x y z">
+        <components> delta_store delta_recall </components>
+        <initialisation>
+            <![CDATA[
+                delta_store = bias_field + grad_fun(x, delta_store_max, gradient_reverse);
+                delta_recall = -bias_field + grad_fun(x, delta_recall_max, !gradient_reverse);
+            ]]>
+        </initialisation>
+    </vector>
+
+    <!-- control field Rabi frequency at each point (before switching on and off in time) -->
+    <vector name="control_beam_profile" type="complex" dimensions="x y z">
+        <components> Omega </components>
+        <initialisation>
+            <![CDATA[
+                if (gaussian_control_beam) {
+                    //pivot about the centre of the memory, so control_beam_offset is the beam's y offset at the memory centre
+                    Omega = Omega_GEM*beam_profile_simple(x, y, z, control_beam_angle, x_mem_min+half_mem_len, control_beam_offset, control_beam_std_dev);
+                } else {
+                    Omega = Omega_GEM;
+                }
+            ]]>
+        </initialisation>
+    </vector>
+
+
+    <sequence>
+        <!-- interval = tmax (575*t_char = 50 us), so storage, the gradient flip and retrieval all happen within the run -->
+        <integrate algorithm="ARK45" interval="5e-5" steps="10000000" tolerance="1e-5">
+            <samples>250</samples>
+
+            <operators>
+                <integration_vectors>state</integration_vectors>
+                <dependencies>gradient_field control_beam_profile</dependencies>
+
+                <!-- time-dependent values that don't depend on position, computed once per step -->
+                <operator kind="functions">
+                    <![CDATA[
+                        g_flip = gradient_flip_fraction(t); //flips the gradient from store to recall
+                        ctrl_switch = control_switch(t); //turns the control beam off for storage and back on for retrieval
+                        //input probe pulse envelope in time (the transverse part is the precomputed probe_input vector)
+                        if (num_pulses > 1){
+                            probe_t_env = E0*pulse_modulation(t)*two_pulse_train(t-(tin+t_gap/2), pulsewidth, t_gap, pulse_phase_diff);
+                        } else {
+                            probe_t_env = E0*pulse_modulation(t)*hermite_pulse_profile(t-tin, pulsewidth);
+                        }
+                    ]]>
+                </operator>
+
+                <!-- probe propagation along x (at each t), driven by the atomic polarisation phi_ge -->
+                <operator kind="cross_propagation" algorithm="RK4" propagation_dimension="x">
+
+                    <!-- transverse diffraction (paraxial): d/dy -> i*ky, so the laplacian -> -(ky^2 + kz^2) -->
+                    <operator kind="IP" constant="yes">
+                        <operator_names>D</operator_names>
+                        <![CDATA[
+                            D = -i*(kz*kz+ky*ky)/(2*k0);
+                        ]]>
+                    </operator>
+
+                    <integration_vectors>probe</integration_vectors>
+
+                    <dependencies>state interacting_atoms</dependencies>
+
+                    <!-- input probe at the memory entrance -->
+                    <boundary_condition kind="left">
+                        <dependencies>probe_input</dependencies>
+                        <![CDATA[
+                            E = probe_t_env*E_in;
+                        ]]>
+                    </boundary_condition>
+
+                    <![CDATA[
+                        dE_dx = i*g*Ni*phi_ge/c + D[E];
+                    ]]>
+                </operator>
+
+                <![CDATA[
+                    double delta = (1-g_flip)*delta_store + g_flip*delta_recall; //two-photon detuning at this point and time
+                    complex Omega_t = Omega*ctrl_switch; //control Rabi frequency at this point and time
+                    double AC_Stark_Shift = Delta*mod2(Omega_t)/(Gamma*Gamma+Delta*Delta); //control-induced shift of the two-photon resonance
+
+                    //weak-probe approximation: the populations stay fixed (all atoms in |g>). The full equations would be
+                    //  dphi_gg_dt = -i*g*E*phi_ge + i*g*conj(E)*phi_ge + Gamma*phi_ee/2 + GammaC*(phi_ss-phi_gg)
+                    //  dphi_ss_dt = -i*Omega_t*phi_es + i*conj(Omega_t)*phi_es + Gamma*phi_ee/2 + GammaC*(phi_gg-phi_ss)
+                    //  dphi_ee_dt = i*g*E*phi_ge + i*Omega_t*phi_es - i*g*conj(E)*phi_ge - i*conj(Omega_t)*phi_es - Gamma*phi_ee
+                    dphi_gg_dt = 0;
+                    dphi_ss_dt = 0;
+                    dphi_ee_dt = 0;
+
+                    dphi_es_dt = i*conj(Omega_t)*(phi_ee-phi_ss) + i*g*conj(E)*phi_gs - (gamma_es - i*(Delta-(delta-AC_Stark_Shift)))*phi_es;
+                    dphi_ge_dt = i*g*E*(phi_gg-phi_ee) + i*Omega_t*phi_gs - (gamma_ge + i*Delta)*phi_ge; //optical coherence
+                    dphi_gs_dt = i*conj(Omega_t)*phi_ge - i*g*E*phi_es - (gamma_gs + i*(delta-AC_Stark_Shift))*phi_gs; //spin-wave coherence
+                ]]>
+            </operators>
+
+        </integrate>
+    </sequence>
+
+    <!-- output: group 1 in the .h5 file, every moment has shape (t, x, y, z) -->
+    <output filename="3Dgem_nosponge" format="hdf5">
+        <group>
+            <sampling basis="x y z">
+                <moments>ER EI grad ctrl phi_geR phi_geI phi_gsR phi_gsI detuning Ni_atoms</moments>
+                <dependencies>state probe gradient_field interacting_atoms control_beam_profile</dependencies>
+                <![CDATA[
+                    _SAMPLE_COMPLEX(E); //probe field
+                    _SAMPLE_COMPLEX(phi_ge); //optical coherence
+                    _SAMPLE_COMPLEX(phi_gs); //spin-wave coherence
+                    Ni_atoms = Ni;
+                    //time-dependent values are recomputed at the sample time t, rather than read back from whatever integration stage ran last
+                    double flip = gradient_flip_fraction(t);
+                    grad = (1-flip)*delta_store + flip*delta_recall; //two-photon detuning (rad/s)
+                    ctrl = abs(Omega*control_switch(t)); //control Rabi frequency magnitude (rad/s), the phase tilt is set by control_beam_angle
+                    detuning = Delta; //single-photon detuning (rad/s), set by the laser frequency so constant throughout
+                ]]>
+            </sampling>
+        </group>
+    </output>
+</simulation>

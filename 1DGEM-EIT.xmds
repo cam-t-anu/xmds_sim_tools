@@ -329,8 +329,8 @@
                 bias_field = 2*pi * bias * f_char;
 
                 Num_atoms = a1 * 1e9; //number of atoms in the pumped (mf = 1) state
-                Num_atoms_m1 = a0 * 1e9; //number of atoms in the mf = -1 state
-                Num_atoms_0 = am1 * 1e9; //number of atoms in the mf = 0 state
+                Num_atoms_m1 = am1 * 1e9; //number of atoms in the mf = -1 state (fixed Nov 2026: was a0)
+                Num_atoms_0 = a0 * 1e9; //number of atoms in the mf = 0 state (fixed Nov 2026: was am1)
 
             ]]>
         </arguments>
