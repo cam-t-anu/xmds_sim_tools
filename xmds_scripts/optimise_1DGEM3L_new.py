@@ -2,8 +2,8 @@
 
 import time
 import numpy as np
-from sim_optimisation import sim_Optimisation_Sweeper
-from general_sim_utils import setup_run_subdir
+from xmds_python_tools import sim_Optimisation_Sweeper
+from xmds_python_tools import setup_run_subdir
 
 
 def outer_routine(args):
@@ -12,75 +12,64 @@ def outer_routine(args):
 def do_sim_Run():
 
     tchar = 86.957e-09
-    tmax = 57.5*tchar
+    tmax = 45*tchar
 
     in_pulse_end_time = 0.35*tmax
-    out_pulse_start_time = 0.52*tmax
+    out_pulse_start_time = 0.65*tmax
 
-    sim_directory = setup_run_subdir('1DGEM-EIT.xmds')
+    sim_directory = setup_run_subdir('1DGEM3L_new.xmds')
 
     outer_sweep_settings = {
-        'parameter':        'a1',
-        'values':           10,
+        'parameter':        'De',
+        'values':           26,
         'outer_routine':    outer_routine, 
-        'sim_xmds_filename': '1DGEM-EIT.xmds'
+        'sim_xmds_filename': '1DGEM3L_new.xmds'
     }
 
     inner_run_settings = {
         'fixed_parameters':     {
-            'Omg':  'default',
-            'ds':   'default',
             'lds':  'default', 
             'ldw':  'default',
-            'dr':   'default',
-            'bias': 'default',
-            'gr':   'default',
+            'gf':   'default',
             'c0':   'default',
+            'c1':   'default',
+            'c2':   'default',
+            'c3':   'default',
+            'c4':   'default',
             'Pw':   'default',
             'Tin':  'default',
             'tgap': 'default',
             'Np': 'default',
-            'a0': 'default',
-            'am1': 'default',
-            'pdiff': 'default',
-            'pmdiff': 'default',
         },
         'input_parameters':     {
-            'gft':   list(np.linspace(start=0.35, stop=0.42, num=3)), 
-            'Ome':   list(np.linspace(start=2.1, stop=2.5, num=3))
+            'dm':   list(np.linspace(0.1, 12, 4)), 
+            'Om':   list(np.linspace(0.1, 12, 5))
         },
         'input_points': [],
         'sim_cmd_settings':     {
             "log":              "timeouts_only",
-            "timeout":          20*60,
-            "sim_name":         '1DGEM-EIT.out',
+            "timeout":          10*60,
+            "sim_name":         '1DGEM3L_new.out',
         },
-        'sim_procs_num':    15,
+        'sim_procs_num':    10,
         'next_run_type':    'sweep'
     }
 
     analysis_settings = {
-        'flags':                ['De', 'Np', 'Ome', 'Omg', 'ds', 'dr', 'Pw', 'Tin', 'c0', 'tgap', 'a1', 'pdiff', 'pmdiff', 'gft', 'bias'],
+        'flags':                ['De', 'Om', 'Pw','Tin','c0','c1','c2','c3','c4','dm','gf','lds','ldw','tgap','Np'],
         'in_pulse_end_time':    in_pulse_end_time,
         'out_pulse_start_time': out_pulse_start_time,
-        'results_file_nametag': '1Dgem-eit',
+        'results_file_nametag': '1DGEM3L_new',
         'num_analysis_procs':   5,
         'sim_directory':        sim_directory
     }
 
     optimiser_settings = {
-        'name':                 '1dgemeit_optimisation',
-        'optimisation_speed':   0.5, #0-1
-        'noise_scale':          0.08,   # more aggressive exploration
         'optimiser_version':    4,
-        'optimisation_rounds':  5,
+        'optimisation_rounds':  2,
         'cost':                 'Efficiency',
         'valid_cost_range':     [0,1],
-        'input_parameters':     ['gft','Ome'],
-        'param_bounds':          {
-            'gft': [0.35, 0.42],
-            'Ome': [2.1, 2.5]
-        }
+        'input_parameters':     ['dm','Om']
     }
 
     S = sim_Optimisation_Sweeper(outer_sweep_settings, inner_run_settings, analysis_settings, optimiser_settings, sim_directory)
@@ -98,7 +87,7 @@ def main():
     
     end = time.time()
     print("All done, time elapsed:", end-start, "seconds")
-    exit()
+    exit
 
 
 if __name__ == "__main__":

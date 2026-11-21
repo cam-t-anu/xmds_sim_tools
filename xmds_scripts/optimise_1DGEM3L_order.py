@@ -2,8 +2,8 @@
 
 import time
 import numpy as np
-from sim_optimisation import sim_Optimisation_Sweeper
-from general_sim_utils import setup_run_subdir
+from xmds_python_tools import sim_Optimisation_Sweeper
+from xmds_python_tools import setup_run_subdir
 
 
 def outer_routine(args):

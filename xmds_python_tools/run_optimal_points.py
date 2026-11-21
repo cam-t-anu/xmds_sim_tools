@@ -12,7 +12,7 @@ import shutil
 from math import floor, log10
 from os import chdir, makedirs, path
 
-from run_sim_utils import multi_Sim_Runner
+from .run_sim_utils import multi_Sim_Runner
 
 DEFAULT_FLAGS = ['De', 'Np', 'Omg', 'ds', 'Pw', 'Tin', 'c0', 'tgap', 'a1', 'pdiff', 'pmdiff', 'gft', 'bias']
 

@@ -11,3 +11,6 @@ __pycache__/
 *.cc
 *.png
 *.pdf
+*.egg-info/
+build/
+dist/

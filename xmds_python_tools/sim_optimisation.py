@@ -5,10 +5,10 @@ import zlib
 from math import floor, isclose, log10
 from os import getcwd, path
 import numpy as np
-from run_sim_utils import multi_Sim_Runner
-from analysis_sim_utils import multi_Sim_Analyser
-from sim_optimiseN import OptimiseN
-from general_sim_utils import print_res_to_CSV, compile_Sims, remove_unwanted_Files
+from .run_sim_utils import multi_Sim_Runner
+from .analysis_sim_utils import multi_Sim_Analyser
+from .sim_optimiseN import OptimiseN
+from .general_sim_utils import print_res_to_CSV, compile_Sims, remove_unwanted_Files
 
 
 def round_to_sig_figs(value, sig_figs=5):

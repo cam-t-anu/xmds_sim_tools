@@ -4,7 +4,7 @@ from os import getcwd, path
 from pprint import pprint
 
 import numpy as np
-from general_sim_utils import import_h5_data, find_h5_files, parse_params_from_h5_filename, print_res_to_CSV
+from .general_sim_utils import import_h5_data, find_h5_files, parse_params_from_h5_filename, print_res_to_CSV
 from multiprocessing import Pool
 
 #Results returned is a list of dictionaries, one for each h5 file. Dictionary contains filename, efficiency, and input parameter values for each flag
